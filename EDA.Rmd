@@ -1,0 +1,133 @@
+---
+title: "Expected credit loss - explanatory data analysis"
+author: "Eligijus Bujokas"
+date: "12/19/2020"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(ggplot2)
+library(zoo)
+library(stringr)
+Sys.setlocale("LC_ALL","C")
+```
+
+# Overview
+
+This document is used to explore the data of the company called "LendingClub". It is an American company that provides short term loans both for individuals and for bussineses. 
+
+To know more about the company, visit: https://www.lendingclub.com/ 
+
+All the files and codes used in this project are stored in the repo: https://github.com/Eligijus112/expected-credit-loss 
+
+The data can be found in kaggle: https://www.kaggle.com/denychaen/lending-club-loans-rejects-data
+
+The data has information about all approved loans from 2007 up until 2019 3th quarter. 
+
+# Reading the data 
+
+```{r "Reading data"}
+# Using fread to read the data
+d <- fread('data/appl_accepted_20072019Q3.csv')
+
+# Total number of loans in the data set
+print(nrow(d))
+
+# Total number of columns 
+print(ncol(d))
+```
+
+In the dataset there are 150 features regarding a unique loan. We will analyze and use in models only some of the features:
+
+**addr_state** - The state provided by the borrower in the loan application
+
+**annual_inc** - The self-reported annual income provided by the borrower during registration.
+
+**dti** - debt to income ratio; a ratio calculated using the borrower’s total monthly debt payments on the total debt obligations, excluding mortgage and the requested LC loan, divided by the borrower’s self-reported monthly income.
+
+**emp_length** - Employment length in years. Possible values are between 0 and 10 where 0 means less than one year and 10 means ten or more years. 
+
+**earliest_cr_line** - the month at which the earliest credit line was opened for the borrower.
+
+**funded_amnt** - The total amount committed to that loan at that point in time.
+
+**home_ownership** - The home ownership status provided by the borrower during registration or obtained from the credit report. Our values are: RENT, OWN, MORTGAGE, OTHER.
+
+**loan_amnt** - The listed amount of the loan applied for by the borrower. If at some point in time, the credit department reduces the loan amount, then it will be reflected in this value.
+
+**loan_status** - current status of the loan.
+
+**pub_rec** - Number of derogatory public records.
+
+**pub_rec_bankruptcies** - Number of public record bankruptcies
+
+**purpose** - A category provided by the borrower for the loan request. 
+
+**issue_d** - The date at which the loan was issued.
+
+**term** - number of payments on the loan. Values can be either 36 or 60.
+
+**int_rate** - interest rate on the loan.
+
+**recoveries** - post charge off gross recovery.
+
+**total_rec_prncp** - principal received to date.
+
+```{r "Important columns"}
+# Defining all the columns used in the analysis
+cols_to_use = c(
+  "addr_state",
+  "annual_inc",
+  'emp_length',
+  'earliest_cr_line',
+  'funded_amnt',
+  'home_ownership',
+  'loan_amnt',
+  'loan_status',
+  'pub_rec',
+  'pub_rec_bankruptcies',
+  'purpose',
+  'issue_d',
+  'term',
+  'int_rate',
+  'recoveries',
+  'total_rec_prncp'
+)
+
+# Subseting the data
+d <- d[, ..cols_to_use]
+
+# Printing the top of the data table
+head(d)
+```
+# Data cleaning
+
+Before analyzing the various splits of the data there are some columns that need to be cleaned and engineered. 
+
+## Date columns
+```{r cleaning:dates}
+# Creating a helper function for date wrangling
+to_date <- function(x){
+  splited = strsplit(x, "-")[[1]]
+  formated = paste(splited[1], str_sub(x, -2), sep="-")
+  zoo::as.yearmon(formated, "%b-%y")
+}
+
+d[, earliest_cr_line_formated:=to_date(earliest_cr_line)]
+d[, issue_d_formated:=to_date(issue_d)]
+
+# Calculating the difference between the two dates
+d[, day_diff:=difftime(issue_d_formated, earliest_cr_line_formated, units='days')]
+
+# Converting to numeric
+d[, day_diff:=as.numeric(day_diff)]
+
+# Calculating the month diff 
+d[, month_diff:=day_diff/30]
+```
+
+
