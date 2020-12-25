@@ -13,6 +13,8 @@ library(data.table)
 library(ggplot2)
 library(zoo)
 library(stringr)
+library(gridExtra)
+library(reshape)
 Sys.setlocale("LC_ALL","C")
 ```
 
@@ -32,7 +34,7 @@ The data has information about all approved loans from 2007 up until 2019 3th qu
 
 ```{r "Reading data"}
 # Using fread to read the data
-d <- fread('data/appl_accepted_20072019Q3.csv')
+d <- fread('data/Loan_status_2007-2020Q3.gzip')
 
 # Total number of loans in the data set
 print(nrow(d))
@@ -95,7 +97,8 @@ cols_to_use = c(
   'term',
   'int_rate',
   'recoveries',
-  'total_rec_prncp'
+  'total_rec_prncp',
+  'dti'
 )
 
 # Subseting the data
@@ -108,33 +111,9 @@ head(d)
 
 Before analyzing the various splits of the data there are some columns that need to be cleaned and engineered. 
 
-## Creating the Y variable 
+## Date columns 
 
-```{r y variable}
-# Printing out unique loan statuses
-print(unique(d$loan_status))
-
-# Function to encode the good loans as 1 and 0 as bad loans
-create_Y <- function(x, bad_loans=c('Late (31-120 days)', "Charged Off", "Does not meet the credit policy. Status:Charged Off")){
-  return(ifelse(is.element(x, bad_loans), 0, 1))
-}
-
-# Creating the Y variable
-d[, Y:=create_Y(loan_status)]
-
-# Saving the variable as factor
-d$Y <- as.factor(d$Y)
-
-# Visualizing the di stribution of Y 
-grouped <- d[, .N, by="Y"]
-
-# Calculating the shares
-grouped[, share:=(N/sum(N))]
-ggplot(data=grouped, aes(x=Y, y=share)) + geom_bar(stat="identity", fill="steelblue")
-```
-
-## Date columns
-```{r cleaning:dates}
+```{r dates}
 # Creating the splited columns 
 d[, c("issue_m", "issue_y"):=tstrsplit(issue_d, "-")]
 
@@ -150,7 +129,7 @@ d[, c("cr_m", "cr_y"):=tstrsplit(earliest_cr_line, "-")]
 # Getting the last two digits of issue_y
 d[, cr_y:=str_sub(cr_y, -2)]
 
-# Creating the formated column
+# Wrangling the earliest cr column
 d[, earliest_cr_line_formated:=zoo::as.yearmon(paste(cr_m, cr_y, sep="-"), "%b-%y")]
 
 # Calculating the difference between the two dates
@@ -164,19 +143,81 @@ d <- d[d$day_diff > 0 & !is.na(d$day_diff)]
 
 # Calculating the month diff 
 d[, month_diff:=round(day_diff/30)]
+```
 
-# Seeing the difference in densities
-ggplot(data=d, aes(x=month_diff, group=Y, fill=Y)) + geom_density(alpha=0.5)
+## Historic loan issues 
+
+```{r loansbytime}
+# Aggregating by issue date and sorting
+loan_n = d[, .N, by="issue_d_formated"] %>% 
+  .[order(issue_d_formated)] %>% 
+  .[, issue_year:=year(issue_d_formated)] %>%
+  .[, N_y:=sum(N), by='issue_year'] %>% 
+  setnames(., c('N', 'N_y'), c('loans_monthly', 'loans_yearly'))
+
+# Ploting the time series
+p1 <- ggplot(data=loan_n, aes(x=issue_d_formated, y=loans_monthly)) + geom_bar(stat="identity", fill="steelblue", color='black') + ggtitle('Monthly count of issued loans')
+p2 <- ggplot(data=unique(loan_n[, .(issue_year, loans_yearly)]), aes(x=issue_year, y=loans_yearly)) + geom_bar(stat="identity", fill="steelblue", color='black') + ggtitle('Yearly count of issued loans')
+
+grid.arrange(p1, p2, ncol = 1)
+```
+
+## Creating the Y variable 
+
+```{r y variable}
+# Printing out unique loan statuses
+print(unique(d$loan_status))
+
+# Function to encode the good loans as 1 and 0 as bad loans
+create_Y <- function(x, bad_loans=c('Late (31-120 days)', "Default", "Charged Off", "Does not meet the credit policy. Status:Charged Off")){
+  return(ifelse(is.element(x, bad_loans), 'bad', 'good'))
+}
+
+# Creating the Y variable
+d[, Y:=create_Y(loan_status)]
+
+# Saving the variable as factor
+d$Y <- as.factor(d$Y)
+
+# Visualizing the di stribution of Y 
+bymonth <- d[, .N, by=c("issue_d_formated", "Y")] %>% 
+  cast(., issue_d_formated ~ Y, value="N") %>% 
+  data.table(.) %>% 
+  .[, rate:=bad * 100/(bad + good)]
+
+# Calculating the shares
+ggplot(data=bymonth, aes(x=issue_d_formated, y=rate)) + geom_area(color="darkblue", fill="lightblue")
+```
+
+After some investigation online and inspecting the drastic decrease in bad loan count since 2016, we will only keep the reliable data up until the end of 2016.
+
+```{r subset}
+d <- d[issue_d_formated < zoo::as.yearmon('2017-01')]
+print(nrow(d))
+```
+
+## Summary statistics of numeric features
+
+```{r summary}
+summary(d[, c('annual_inc', 'loan_amnt', 'pub_rec', 'pub_rec_bankruptcies', 'int_rate', 'dti', 'month_diff')])
+```
+
+
+## Debt to income ratio
+
+```{r dti}
+ggplot(data=d[dti<100], aes(x=dti, fill=Y)) + geom_density(alpha=0.5)
 ```
 
 ## Annual income
 
-```{r annual income}
+```{r annual_income}
 ggplot(data=d[annual_inc < 200000], aes(x=annual_inc, fill=Y)) + geom_density(alpha=0.5)
 ```
+
 ## Loan amount
 
-```{r loan amount}
+```{r loan_amount}
 ggplot(data=d, aes(x=loan_amnt, fill=Y)) + geom_density(alpha=0.5)
 ```
 ## Interest rate 
@@ -186,12 +227,17 @@ d$int_rate <- as.numeric(gsub("%", "", d$int_rate))
 
 ggplot(data=d, aes(x=int_rate, fill=Y)) + geom_density(alpha=0.5)
 ```
+
 ## Length of employment
 
-```{r employment length cleaning}
+```{r employment_length_cleaning}
 # Function to fill missing values
 employment_length_fill <- function(x){
-  return(ifelse(is.na(x) | x == "", "< 1 year", x))
+  x <- ifelse(is.na(x) | x == "", "< 1 year", x)
+  x <- sub('< 1', '0', x)
+  x <- sub('10\\+', '10', x)
+  x <- sub('years|year', '', x)
+  return(x)
 }
 
 d[, emp_length:=employment_length_fill(emp_length)]
@@ -201,38 +247,40 @@ grouped <- d[, .N, by="emp_length"]
 
 # Calculating the shares
 grouped[, share:=(N/sum(N))]
-ggplot(data=grouped, aes(x=emp_length, y=share)) + geom_bar(stat="identity", fill="steelblue")
 ```
 
 ## Loan term distribution
 
-```{r loan term}
+```{r loan_term}
 grouped <- d[, .N, by="term"]
 grouped[, share:=(N/sum(N))]
-ggplot(data=grouped, aes(x=term, y=share)) + geom_bar(stat="identity", fill="steelblue")
 ```
 
 ## LGD independant variable - recovery rate
 
-```{r recovery rate}
+```{r recovery rate, warning=FALSE}
 d[, recovery_rate:=recoveries/funded_amnt]
 d[, recovery_rate:=ifelse(recovery_rate>1, 1, recovery_rate)]
 
 # Ploting the recovery rate distribution
-ggplot(data=d[recovery_rate>0], aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black')
+p1 <- ggplot(data=d, aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Full data')
+
+# Ploting the recovery rate distribution without the recovery rate of 0
+p2 <- ggplot(data=d[recovery_rate>0], aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Without 0')
+
+grid.arrange(p1, p2, nrow = 1)
 ```
 
 ## EAD independant variable - credit conversion factor
 
-```{r credit conversion factor}
+```{r credit conversion factor, warning=FALSE}
 d[, CCF:=(funded_amnt - total_rec_prncp)/funded_amnt]
-ggplot(data=d, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black')
-```
 
-# Loans issued by month
+# Ploting the recovery rate distribution
+p1 <- ggplot(data=d, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Full data')
 
-```{r loan by month}
-grouped = d[, .N, by="issue_d_formated"]
-grouped = grouped[order(issue_d_formated)]
-ggplot(data=grouped, aes(x=issue_d_formated, y=N)) + geom_line()
+# Ploting the recovery rate distribution without the recovery rate of 0
+p2 <- ggplot(data=d[CCF>0], aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Without 0')
+
+grid.arrange(p1, p2, nrow = 1)
 ```
