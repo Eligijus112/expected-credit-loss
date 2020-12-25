@@ -210,6 +210,9 @@ summary(d[, c('annual_inc', 'loan_amnt', 'pub_rec', 'pub_rec_bankruptcies', 'int
 
 ```{r dti}
 ggplot(data=d[dti<100], aes(x=dti, fill=Y)) + geom_density(alpha=0.5)
+
+# Droping the rows with negative dti 
+d <- d[dti>=0]
 ```
 
 ## Annual income
@@ -230,7 +233,7 @@ ggplot(data=d, aes(x=loan_amnt, fill=Y)) + geom_density(alpha=0.5)
 ggplot(data=d, aes(x=int_rate, fill=Y)) + geom_density(alpha=0.5)
 ```
 
-## Cleaninng the employtment length variable
+## Cleaninng the employment length variable
 
 ```{r emp length}
 clean_emp_length <- function(x){

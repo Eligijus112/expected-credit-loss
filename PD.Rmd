@@ -15,6 +15,7 @@ library(zoo)
 library(stringr)
 library(gridExtra)
 library(reshape)
+library(pROC)
 Sys.setlocale("LC_ALL","C")
 ```
 
@@ -94,9 +95,6 @@ plotWoe <- function(ft, woeData){
             coord_flip()
    return(p)
 }
-
-p <- plotWoe('purpose', woeResult)
-p
 ```
 
 ## Iterating through all categorical features 
@@ -119,15 +117,16 @@ As we can see from the plots, the only adjustment will be needed to emp_length v
 
 ```{r adjust emp_length}
 adjust_emp_length <- function(x){
-  return(ifelse(is.element(x, c("1 year", "2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 years")), "1-9 year", as.character(x)))
+  return(ifelse(is.element(x, c("< 1 year")), "< 1 year", "1+ year"))
 }
 
-train[, emp_length:=adjust_emp_length(emp_length)]
+train$emp_length_groups <- sapply(train$emp_length, adjust_emp_length)
 
-woeStat <- woe('emp_length', train)
-p <- plotWoe('emp_length', woeStat)
+woeStat <- woe('emp_length_groups', train)
+p <- plotWoe('emp_length_groups', woeStat)
 p
 ```
+
 ## Annual income
 
 ```{r}
@@ -174,9 +173,180 @@ adj_income <- function(x){
   }
 }
 
-train$inc_final <- sapply(train$annual_inc_c, adj_income)
+train$annual_inc_groups <- sapply(train$annual_inc, adj_income)
 
-woedf <- woe('inc_final', train)
-plotWoe('Final annaul income', woedf)
+woedf <- woe('annual_inc_groups', train)
+plotWoe('Final annual income splits', woedf)
 ```
 
+## Interest rate
+
+```{r interest_rate}
+adj_int_rate <- function(x){
+  if (x < 10) {
+    return("[0,10)")
+  } else if(x < 15){
+    return("[10, 15)")
+  } else if(x < 25){
+    return("[15, 25)")
+  } else {
+    return("25+")
+  }
+}
+
+train$int_rate_groups = sapply(train$int_rate, adj_int_rate)
+woedf <- woe('int_rate_groups', train)
+plotWoe('int_rate_groups', woedf)
+```
+
+
+## DTI 
+
+```{r}
+# Droping the outliers
+train$dti_c <- sapply(train$dti, capvalues, cap=40)
+
+# Ploting the distribution
+ggplot(data=train, aes(x=dti_c)) + geom_density(fill='blue')
+
+# Cutting the annual income into 10 equal sized partitions
+train$dti_groups = cut(train$dti_c, 7)
+
+woedf <- woe('dti_groups', train)
+plotWoeNumeric('dti', woedf)
+```
+
+```{r final_dti}
+adj_dti <- function(x){
+  if(x < 11){
+    return("[0,11)")
+  } else if (x < 17){
+    return("[11,17)")
+  } else if (x < 30){
+    return("[17,30)")
+  } else {
+    return("30+")
+  } 
+}
+
+train$dti_groups <- sapply(train$dti, adj_dti)
+
+woedf <- woe('dti_groups', train)
+plotWoe('Final dti splits', woedf)
+```
+
+## Public records
+
+```{r public record}
+adj_pub_rec <- function(x){
+  if(x==0){
+    return("0")
+  } else {
+    return(">0")
+  }
+}
+
+train$pub_rec_groups = sapply(train$pub_rec, adj_pub_rec)
+
+woedf <- woe('pub_rec_groups', train)
+plotWoeNumeric('pub_rec_groups', woedf)
+```
+
+```{r pub_rec_bankruptcy}
+train$pub_rec_bankruptcies_groups = sapply(train$pub_rec_bankruptcies, adj_pub_rec)
+
+woedf <- woe('pub_rec_bankruptcies_groups', train)
+plotWoeNumeric('pub_rec_bankruptcies_groups', woedf)
+```
+
+## Month differences between loan and cr line
+
+```{r month_diff}
+# Ploting the distribution
+ggplot(data=train, aes(x=month_diff)) + geom_density(fill='blue')
+
+# Cutting the annual income into 10 equal sized partitions
+train$month_diff_groups = cut(train$month_diff , 10)
+
+woedf <- woe('month_diff_groups', train)
+plotWoeNumeric('month_diff_groups', woedf)
+```
+
+```{r final_month_diff}
+adj_month_diff <- function(x){
+  if(x<70){
+    return("[0, 70)")
+  } else if (x < 180){
+    return("[70, 180)")
+  } else if (x < 240) {
+    return("[180, 240)")
+  } else {
+    return("240+")
+  }
+}
+
+train$month_diff_groups = sapply(train$month_diff, adj_month_diff)
+
+woedf <- woe('month_diff_groups', train)
+plotWoe('month_diff_groups', woedf)
+```
+# Linear regression model 
+
+## Creating the input matrix for the model 
+
+```{r finalframe}
+colsModeling = c(
+  "Y",
+  "purpose",
+  "term",
+  "pub_rec_groups",
+  "annual_inc_groups",
+  "dti_groups",
+  "month_diff_groups",
+  "emp_length_groups",
+  "int_rate_groups"
+)
+
+X = train[, ..colsModeling]
+
+# Ensuring the correct datatype
+X[,(colsModeling) := lapply(.SD, as.factor), .SDcols = colsModeling] 
+```
+
+## Creating the model 
+
+```{r logistic}
+model <- glm(Y ~ ., data=X, family=binomial(link='logit'))
+
+summary(model)
+```
+
+# Model performance on the test set 
+
+```{r preparing input}
+test$pub_rec_groups <- sapply(test$pub_rec, adj_pub_rec)
+test$annual_inc_groups <- sapply(test$annual_inc, adj_income)
+test$dti_groups <- sapply(test$dti, adj_dti)
+test$month_diff_groups <- sapply(test$month_diff, adj_month_diff)
+test$emp_length_groups <- sapply(test$emp_length, adjust_emp_length)
+test$int_rate_groups <- sapply(test$int_rate, adj_int_rate)
+
+Xtest = test[, ..colsModeling]
+
+# Ensuring the correct datatype
+Xtest[,(colsModeling) := lapply(.SD, as.factor), .SDcols = colsModeling] 
+
+# Getting the probabilities
+yhat <- predict.glm(model, Xtest, type='response')
+```
+
+```{r inspecting the results}
+test$yhat <- yhat
+
+# Getting the ROC statistic 
+ROC <- roc(test$Y, test$yhat)
+roc_stat <- ROC$auc
+ggroc(ROC) + geom_abline(intercept = 1, slope = 1, color='blue')
+print(paste("AUC score: ", roc_stat))
+print(paste("Gini score: ", 2 * roc_stat - 1))
+```
