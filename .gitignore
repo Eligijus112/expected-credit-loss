@@ -4,3 +4,5 @@ appl_accepted_20072019Q3.csv
 .Rproj.user
 *.Rproj
 *.gzip
+test.csv
+train.csv

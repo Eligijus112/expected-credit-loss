@@ -1,0 +1,182 @@
+---
+title: "Probability of default (PD) model"
+author: "Eligijus Bujokas"
+date: "12/19/2020"
+output: 
+  html_document:
+    toc: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(data.table)
+library(ggplot2)
+library(zoo)
+library(stringr)
+library(gridExtra)
+library(reshape)
+Sys.setlocale("LC_ALL","C")
+```
+
+# Problem overview
+
+The objective is to from the data that is in the *train.csv* file create a model that predicts the probability of default (PD) model. Then, the model is tested on the data that is in the file *test.csv*. 
+
+The model will be a logistic regression model. 
+
+# Reading data
+
+```{r reading data}
+train <- fread('data/train.csv')
+test <- fread('data/test.csv')
+
+print(head(train))
+print(head(test))
+
+print(nrow(train))
+print(nrow(test))
+```
+# Data cleaning 
+
+```{r summary of data}
+summary(train)
+
+# Droping NA 
+train = na.omit(train)
+test = na.omit(test)
+
+# Ensuring the correct data types 
+train$term <- as.factor(train$term)
+train$emp_length <- as.factor(train$emp_length)
+train$home_ownership <- as.factor(train$home_ownership)
+train$purpose <- as.factor(train$purpose)
+```
+
+# Weight of evidence
+
+To infer what categorical feature values are the most influential in determining bad loan from a good loan we can use the weight of evidence (WOE for short) criteria. For a feature $i$ and the feature level $j$ the $WOE_{i, j}$ is calculated with the following formula:
+
+$$WOE_{i, j} = log \left(\dfrac{P(X_{i}=j|Y=1)}{P(X_{i} = j|Y=0)}\right)$$
+Lets define a function in R that calculates the WOE statistic for any given feature. Note, that the dependent variable needs to be called **Y**.
+
+```{r woe}
+woe <- function(feature, data){
+  # Grouping by the feature and getting the total number of observations in each level
+  woeTable <- data[, .N, by=c("Y", feature)] %>% 
+    # Seting the names 
+    setnames(., c('Y', 'feature', 'N')) %>% 
+    # Casting so that Y is in the columns
+    cast(., feature ~ Y, value="N") %>% 
+    # Converting back to data.table
+    data.table(.) %>% 
+    # Filling the missing values with 0 
+    setnafill(., fill=0, cols=c('good', 'bad')) %>%
+    # Getting the proportions of good and bad borrowers in each level of the variable
+    .[, c('prop_good', 'prop_bad') := list(good/sum(good), bad/sum(bad))] %>% 
+    # Calculating the WOE statistic 
+    .[, woe:=log(prop_good/prop_bad)] %>% 
+    # Sorting by the woe stat
+    .[order(woe, decreasing=TRUE)]
+  
+  return(woeTable)
+}
+
+# Example of the function output:
+woeResult = woe('purpose', train)
+print(woeResult)
+
+# Defining a function to plot the woe 
+plotWoe <- function(ft, woeData){
+  p <- ggplot(woeData, aes(x=reorder(feature, woe), y=woe)) + 
+            geom_bar(stat="identity", fill="steelblue", color='black') + 
+            ggtitle(ft) + 
+            labs(x='Feature value') +
+            coord_flip()
+   return(p)
+}
+
+p <- plotWoe('purpose', woeResult)
+p
+```
+
+## Iterating through all categorical features 
+
+The initial weight of evidence plots:
+
+```{r}
+cat_vars <- c("purpose", "emp_length", "term", "home_ownership")
+plots <- list()
+
+for(cat_var in cat_vars){
+  woeStat <- woe(cat_var, train)
+  plots[[cat_var]] <- plotWoe(cat_var, woeStat)
+}
+
+grid.arrange(plots$purpose, plots$emp_length, plots$term, plots$home_ownership, ncol = 2, nrow=2)
+```
+
+As we can see from the plots, the only adjustment will be needed to emp_length variable. 
+
+```{r adjust emp_length}
+adjust_emp_length <- function(x){
+  return(ifelse(is.element(x, c("1 year", "2 years", "3 years", "4 years", "5 years", "6 years", "7 years", "8 years", "9 years")), "1-9 year", as.character(x)))
+}
+
+train[, emp_length:=adjust_emp_length(emp_length)]
+
+woeStat <- woe('emp_length', train)
+p <- plotWoe('emp_length', woeStat)
+p
+```
+## Annual income
+
+```{r}
+capvalues <- function(x, cap){
+  return(min(c(x, cap)))
+}
+
+plotWoeNumeric <- function(ft, woeData){
+  p <- ggplot(woeData, aes(x=feature, y=woe)) + 
+            geom_bar(stat="identity", fill="steelblue", color='black') + 
+            ggtitle(ft) + 
+            labs(x='Feature value') +
+            coord_flip()
+   return(p)
+}
+
+# Droping the outliers
+train$annual_inc_c <- sapply(train$annual_inc, capvalues, cap=300000)
+
+# Ploting the distribution
+ggplot(data=train, aes(x=annual_inc_c)) + geom_density(fill='blue')
+
+# Cutting the annual income into 10 equal sized partitions
+train$annual_inc_groups = cut(train$annual_inc_c / 1000, 10)
+
+woedf <- woe('annual_inc_groups', train)
+plotWoeNumeric('annual_income', woedf)
+```
+
+Defining a function for annual income split. 
+
+```{r final_income}
+adj_income <- function(x){
+  if(x < 30000){
+    return("[0,30)")
+  } else if (x < 60000){
+    return("[30,60)")
+  } else if (x < 100000){
+    return("[60,100)")
+  } else if (x < 200000){
+    return("[100,200)")
+  } else {
+    return("200+")
+  }
+}
+
+train$inc_final <- sapply(train$annual_inc_c, adj_income)
+
+woedf <- woe('inc_final', train)
+plotWoe('Final annaul income', woedf)
+```
+

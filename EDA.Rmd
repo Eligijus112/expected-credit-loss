@@ -199,6 +199,9 @@ print(nrow(d))
 ## Summary statistics of numeric features
 
 ```{r summary}
+# Cleaning the interest rates
+d$int_rate <- as.numeric(gsub("%", "", d$int_rate))
+
 summary(d[, c('annual_inc', 'loan_amnt', 'pub_rec', 'pub_rec_bankruptcies', 'int_rate', 'dti', 'month_diff')])
 ```
 
@@ -220,40 +223,21 @@ ggplot(data=d[annual_inc < 200000], aes(x=annual_inc, fill=Y)) + geom_density(al
 ```{r loan_amount}
 ggplot(data=d, aes(x=loan_amnt, fill=Y)) + geom_density(alpha=0.5)
 ```
+
 ## Interest rate 
 
 ```{r interest rate}
-d$int_rate <- as.numeric(gsub("%", "", d$int_rate))
-
 ggplot(data=d, aes(x=int_rate, fill=Y)) + geom_density(alpha=0.5)
 ```
 
-## Length of employment
+## Cleaninng the employtment length variable
 
-```{r employment_length_cleaning}
-# Function to fill missing values
-employment_length_fill <- function(x){
-  x <- ifelse(is.na(x) | x == "", "< 1 year", x)
-  x <- sub('< 1', '0', x)
-  x <- sub('10\\+', '10', x)
-  x <- sub('years|year', '', x)
-  return(x)
+```{r emp length}
+clean_emp_length <- function(x){
+  return(ifelse(x=="", "< 1 year", x))
 }
 
-d[, emp_length:=employment_length_fill(emp_length)]
-
-# Ploting the distribution of loans by emp length
-grouped <- d[, .N, by="emp_length"]
-
-# Calculating the shares
-grouped[, share:=(N/sum(N))]
-```
-
-## Loan term distribution
-
-```{r loan_term}
-grouped <- d[, .N, by="term"]
-grouped[, share:=(N/sum(N))]
+d[, emp_length:=clean_emp_length(emp_length)]
 ```
 
 ## LGD independant variable - recovery rate
@@ -284,3 +268,42 @@ p2 <- ggplot(data=d[CCF>0], aes(x=CCF)) + geom_histogram(fill='steelblue', color
 
 grid.arrange(p1, p2, nrow = 1)
 ```
+
+# Spliting the data into train and test sets
+
+The objective of this analysis is to create an ECL model that uses data up to 2015 (train set) to create the model and then test it out on unseen data from 2016 (test set). We will save this data into two separate files - train.csv and test.csv.
+
+```{r train_test_split}
+final_cols = c(
+  "issue_d",
+  "term",
+  "loan_amnt",
+  "Y",
+  "annual_inc",
+  "emp_length",
+  "pub_rec",
+  "home_ownership",
+  "pub_rec_bankruptcies",
+  "purpose",
+  "int_rate",
+  "dti",
+  "month_diff",
+  "recovery_rate",
+  "CCF"
+)
+
+train <- d[issue_d_formated < zoo::as.yearmon('2016-01'), ..final_cols]
+test <- d[issue_d_formated >= zoo::as.yearmon('2016-01'), ..final_cols]
+
+# Saving the data 
+write.csv(na.omit(train), 'data/train.csv', row.names=FALSE)
+write.csv(na.omit(test), 'data/test.csv', row.names=FALSE)
+```
+
+# Removing objects from memory
+
+```{r}
+rm(list=ls())
+```
+
+
