@@ -35,7 +35,8 @@ The data has information about all approved loans from 2007 up until 2019 3th qu
 ```{r "Reading data"}
 # Using fread to read the data
 d <- fread('data/Loan_status_2007-2020Q3.gzip')
-
+#d <- fread('data/loan_data_2007_2014.csv')
+  
 # Total number of loans in the data set
 print(nrow(d))
 
@@ -79,6 +80,11 @@ In the dataset there are 150 features regarding a unique loan. We will analyze a
 
 **total_rec_prncp** - principal received to date.
 
+**verification_status** - Indicates if income was verified by LC, not verified, or if the income source was verified.
+
+**delinq_2yrs** - The number of 30+ days past-due incidences of delinquency in the borrower's credit file for the past 2 years.
+
+
 ```{r "Important columns"}
 # Defining all the columns used in the analysis
 cols_to_use = c(
@@ -98,7 +104,12 @@ cols_to_use = c(
   'int_rate',
   'recoveries',
   'total_rec_prncp',
-  'dti'
+  'dti',
+  'verification_status',
+  "delinq_2yrs",
+  "initial_list_status",
+  "hardship_flag",
+  "grade"
 )
 
 # Subseting the data
@@ -202,7 +213,7 @@ print(nrow(d))
 # Cleaning the interest rates
 d$int_rate <- as.numeric(gsub("%", "", d$int_rate))
 
-summary(d[, c('annual_inc', 'loan_amnt', 'pub_rec', 'pub_rec_bankruptcies', 'int_rate', 'dti', 'month_diff')])
+summary(d[, c('annual_inc', 'loan_amnt', 'pub_rec', 'int_rate', 'dti', 'month_diff')])
 ```
 
 
@@ -243,6 +254,20 @@ clean_emp_length <- function(x){
 d[, emp_length:=clean_emp_length(emp_length)]
 ```
 
+## Cleaaning the hadsdhip flag variable
+
+```{r hardship}
+clean_hardship <- function(x){
+  if(x == ''){
+    return('missing')
+  } else {
+    return(x)
+  }
+}
+
+d$hardship_flag <- sapply(d$hardship_flag, clean_hardship)
+```
+
 ## LGD independant variable - recovery rate
 
 ```{r recovery rate, warning=FALSE}
@@ -274,11 +299,12 @@ grid.arrange(p1, p2, nrow = 1)
 
 # Spliting the data into train and test sets
 
-The objective of this analysis is to create an ECL model that uses data up to 2015 (train set) to create the model and then test it out on unseen data from 2016 (test set). We will save this data into two separate files - train.csv and test.csv.
+We will split the data into a 75% - 25% train and test data split.
 
 ```{r train_test_split}
 final_cols = c(
   "issue_d",
+  "addr_state",
   "term",
   "loan_amnt",
   "Y",
@@ -292,8 +318,15 @@ final_cols = c(
   "dti",
   "month_diff",
   "recovery_rate",
-  "CCF"
+  "CCF",
+  "verification_status",
+  "delinq_2yrs",
+  "initial_list_status",
+  "hardship_flag",
+  "grade"
 )
+
+dt = sort(sample(nrow(d), nrow(d)*.75))
 
 train <- d[issue_d_formated < zoo::as.yearmon('2016-01'), ..final_cols]
 test <- d[issue_d_formated >= zoo::as.yearmon('2016-01'), ..final_cols]

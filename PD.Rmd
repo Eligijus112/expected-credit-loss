@@ -16,6 +16,9 @@ library(stringr)
 library(gridExtra)
 library(reshape)
 library(pROC)
+library(ROCR)
+library(fastDummies)
+library(tidytable)
 Sys.setlocale("LC_ALL","C")
 ```
 
@@ -40,8 +43,6 @@ print(nrow(test))
 # Data cleaning 
 
 ```{r summary of data}
-summary(train)
-
 # Droping NA 
 train = na.omit(train)
 test = na.omit(test)
@@ -51,6 +52,13 @@ train$term <- as.factor(train$term)
 train$emp_length <- as.factor(train$emp_length)
 train$home_ownership <- as.factor(train$home_ownership)
 train$purpose <- as.factor(train$purpose)
+train$verification_status <- as.factor(train$verification_status)
+train$addr_state <- as.factor(train$addr_state)
+train$initial_list_status <- as.factor(train$initial_list_status)
+train$hardship_flag <- as.factor(train$hardship_flag)
+train$grade <- as.factor(train$grade)
+
+summary(train)
 ```
 
 # Weight of evidence
@@ -102,7 +110,7 @@ plotWoe <- function(ft, woeData){
 The initial weight of evidence plots:
 
 ```{r}
-cat_vars <- c("purpose", "emp_length", "term", "home_ownership")
+cat_vars <- c("purpose", "emp_length", "grade", "home_ownership", 'initial_list_status', 'verification_status')
 plots <- list()
 
 for(cat_var in cat_vars){
@@ -110,14 +118,48 @@ for(cat_var in cat_vars){
   plots[[cat_var]] <- plotWoe(cat_var, woeStat)
 }
 
-grid.arrange(plots$purpose, plots$emp_length, plots$term, plots$home_ownership, ncol = 2, nrow=2)
+grid.arrange(plots$purpose, plots$emp_length, plots$grade, plots$home_ownership, plots$initial_list_status, plots$verification_status, ncol = 3, nrow=3)
+```
+
+```{r adjusting the addr_state variable}
+adj_addr_state <- function(x){
+  if (is.element(x, c('DC', 'VT', 'NH'))){
+    return("DC:VT:NH")
+  } else if (is.element(x, c('ME', 'CO', 'WV', 'WY', 'WA', 'SC', 'KS'))){
+    return("ME:CO:WV:WY:WA:SC:KS")
+  } else if (is.element(x, c('ND', 'NM', 'SD', 'TN', 'LA', 'NV'))){
+    return("ND:NM:SD:TN:LA:NV")
+  } else if (is.element(x, c("OK", 'AL', 'AR', 'MS', 'NE'))){
+    return('OK:AL:AR:MS:NE')
+  } else {
+    return("other")
+  }
+}
+
+train$addr_state_groups <- sapply(train$addr_state, adj_addr_state)
+
+woeStat <- woe('addr_state_groups', train)
+p <- plotWoe('addr_state_groups', woeStat)
+p
 ```
 
 As we can see from the plots, the only adjustment will be needed to emp_length variable. 
 
 ```{r adjust emp_length}
 adjust_emp_length <- function(x){
-  return(ifelse(is.element(x, c("< 1 year")), "< 1 year", "1+ year"))
+  if(is.element(x, ("< 1 year"))){
+    return("< 1 year")
+  } else if (x=='1 year') {
+    return ('1 year')
+  } else if (is.element(x, c('2 years', '3 years', '4 years'))){
+    return ('2-4 years')
+  } else if (is.element(x, c('5 years', '6 years', '7 years')))(
+    return('5-7 years')
+  ) else if (is.element(x, c('8 years', '9 years'))){
+    return('8-9 years') 
+  } else {
+    return('10+ years')
+  }
 }
 
 train$emp_length_groups <- sapply(train$emp_length, adjust_emp_length)
@@ -125,6 +167,10 @@ train$emp_length_groups <- sapply(train$emp_length, adjust_emp_length)
 woeStat <- woe('emp_length_groups', train)
 p <- plotWoe('emp_length_groups', woeStat)
 p
+```
+
+```{r}
+
 ```
 
 ## Annual income
@@ -179,6 +225,35 @@ woedf <- woe('annual_inc_groups', train)
 plotWoe('Final annual income splits', woedf)
 ```
 
+## Loan amount
+
+```{r loan_amnt}
+# Cutting the annual income into 10 equal sized partitions
+train$loan_amnt_groups = cut(train$loan_amnt/1000, 10)
+
+woedf <- woe('loan_amnt_groups', train)
+plotWoeNumeric('loan_amnt_groups ', woedf)
+```
+
+```{r loan_amnt adj}
+adj_loan_amnt <- function(x){
+  if (x < 8000) {
+    return("[0,8000)")
+  } else if(x < 11000){
+    return("[8000, 11000)")
+  } else if(x < 22000){
+    return("[11000, 22000)")
+  } else {
+    return("22000+")
+  }
+}
+
+train$loan_amnt_groups = sapply(train$loan_amnt, adj_loan_amnt)
+woedf <- woe('loan_amnt_groups', train)
+plotWoe('loan_amnt_groups', woedf)
+```
+
+
 ## Interest rate
 
 ```{r interest_rate}
@@ -199,6 +274,24 @@ woedf <- woe('int_rate_groups', train)
 plotWoe('int_rate_groups', woedf)
 ```
 
+## Past 2 year delinquencies
+
+```{r}
+adj_delinq_2yrs <- function(x){
+  if(x == 0){
+    return('0')
+  } else if (x < 4){
+    return('[1, 3]')
+  } else {
+    return('4+')
+  }
+}
+
+train$delinq_2yrs_groups <- sapply(train$delinq_2yrs, adj_delinq_2yrs)
+  
+woedf <- woe('delinq_2yrs_groups', train)
+plotWoe('delinq_2yrs_groups', woedf)
+```
 
 ## DTI 
 
@@ -296,21 +389,52 @@ plotWoe('month_diff_groups', woedf)
 
 ```{r finalframe}
 colsModeling = c(
-  "Y",
-  "purpose",
+  #"purpose",
   "term",
   "pub_rec_groups",
   "annual_inc_groups",
   "dti_groups",
   "month_diff_groups",
   "emp_length_groups",
-  "int_rate_groups"
+  "int_rate_groups",
+  "loan_amnt_groups"
+  #'addr_state_groups',
+  #'verification_status'
+  #'delinq_2yrs_groups',
+  #'initial_list_status',
+  #'hardship_flag',
+  #'grade'
 )
 
 X = train[, ..colsModeling]
 
-# Ensuring the correct datatype
-X[,(colsModeling) := lapply(.SD, as.factor), .SDcols = colsModeling] 
+# Creating the dummy variable matrix 
+X <- get_dummies.(X, prefix_sep = ":") %>% 
+  data.table(.)
+
+# Creating a list of reference columns 
+refCols <- c(
+  "term:60 months", 
+  "annual_inc_groups:[0,30)",
+  "dti_groups:30+",
+  "emp_length_groups:< 1 year",
+  "int_rate_groups:25+",
+  #"grade:G",
+  "loan_amnt_groups:22000+",
+  "pub_rec_groups:>0",
+  "month_diff_groups:[0, 70)"
+  )
+
+# Dropping the reference columns 
+X <- X %>% 
+  dplyr::select(., -refCols) %>% 
+  dplyr::select(., -colsModeling)
+
+# Final feature list 
+featuresFinal = names(X)
+
+# Adding the target variable
+X$Y <- ifelse(train$Y=='good', 1, 0)
 ```
 
 ## Creating the model 
@@ -330,14 +454,27 @@ test$dti_groups <- sapply(test$dti, adj_dti)
 test$month_diff_groups <- sapply(test$month_diff, adj_month_diff)
 test$emp_length_groups <- sapply(test$emp_length, adjust_emp_length)
 test$int_rate_groups <- sapply(test$int_rate, adj_int_rate)
+test$loan_amnt_groups <- sapply(test$loan_amnt, adj_loan_amnt)
+test$addr_state_groups <- sapply(test$addr_state, adj_addr_state)
+test$delinq_2yrs_groups <- sapply(test$delinq_2yrs, adj_delinq_2yrs)
 
 Xtest = test[, ..colsModeling]
 
-# Ensuring the correct datatype
-Xtest[,(colsModeling) := lapply(.SD, as.factor), .SDcols = colsModeling] 
+# Creating the testing dummies 
+Xtest <- get_dummies.(Xtest, prefix_sep =":")
 
-# Getting the probabilities
-yhat <- predict.glm(model, Xtest, type='response')
+# Leaving only the final column list
+Xtest <- Xtest %>% dplyr::select(., all_of(featuresFinal))
+
+# Multiplying the test matrix with the coefficient vector
+coefs <- model$coefficients[-1]
+intercept <- model$coefficients[1]
+
+product <- as.matrix(Xtest) %*% coefs
+product <- product + intercept
+
+# Getting the final probabilities 
+yhat <- 1/(1 + exp(-product))
 ```
 
 ```{r inspecting the results}
@@ -346,7 +483,101 @@ test$yhat <- yhat
 # Getting the ROC statistic 
 ROC <- roc(test$Y, test$yhat)
 roc_stat <- ROC$auc
-ggroc(ROC) + geom_abline(intercept = 1, slope = 1, color='blue')
 print(paste("AUC score: ", roc_stat))
 print(paste("Gini score: ", 2 * roc_stat - 1))
+```
+
+```{r clf visual}
+par(mfrow=c(2, 2))
+pred <- ROCR::prediction(test$yhat, test$Y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+plot(perf, main='ROC plot')
+abline(b=1, a=0, col='blue')
+
+perf <- performance(pred, measure = "prec", x.measure = "cutoff")
+plot(perf, main='Precision plot')
+
+perf <- performance(pred, measure = "rec", x.measure = "cutoff")
+plot(perf, main='Recall plot')
+```
+
+# Creating a scorecard 
+
+The min score will be 200 and the max score will be 800. 
+
+```{r coefs}
+coefFrame <- data.table(feature=names(coefs), coef=coefs)
+coefFrameRef <- data.table(feature=refCols, coef=0)
+coefFrameIntercept <- data.table(feature='intercept', coef=intercept)
+
+coefFrame <- rbind(coefFrame, coefFrameRef)
+coefFrame <- rbind(coefFrame, coefFrameIntercept)
+
+# Removing the ` symbol from the feature names 
+coefFrame$feature <- gsub('`', '', coefFrame$feature)
+
+# Getting the original name 
+coefFrame[, c('origFeature') := tstrsplit(feature, ":")[[1]]]
+
+# Defining the min and max score
+min_score <- 200
+max_score <- 800
+
+# Getting the lowest possible scores from each feature
+mincoef <- coefFrame[, .("coef_value"=min(coef)), by='origFeature']
+maxcoef <- coefFrame[, .("coef_value"=max(coef)), by='origFeature']
+
+# Summing all the values and adding the intercept to get the lowest and the biggest possible scores
+sumMin <- sum(mincoef$coef_value)
+sumMax <- sum(maxcoef$coef_value)
+```
+
+To convert the coefficient to a score, we need to follow the following formula:
+
+$$score = coef\dfrac{(max\_score - min\_score)}{maxsum\_coef - minsum\_coef}$$
+
+To adjust the coefficient for the intercept we will use the formula:
+
+$$ score\_intercept = \dfrac{(intercept\_coef - min\_sum\_coef)}{(max\_sum\_coef - min\_sum\_coef)} (max\_score - min\_score) + min\_score $$
+
+```{r scores}
+coefFrame$score <- coefFrame$coef * (max_score - min_score) / (sumMax - sumMin)
+
+scoreIntercept <- min_score + (max_score - min_score) * ((intercept - sumMin)/(sumMax - sumMin))
+
+# Adding the value to the scorecard
+coefFrame[feature=='intercept']$score <- scoreIntercept
+
+# Rounding the scores
+coefFrame$score_rounded <- sapply(coefFrame$score, round)
+
+# Getting the differences 
+coefFrame$diff <- coefFrame$score - coefFrame$score_rounded
+
+# Getting the maximum score from the scorecard 
+maxScoreCard <- coefFrame[, .('maxscore'=max(score_rounded)),  by='origFeature']
+maxScoreCard <- sum(maxScoreCard$maxscore)
+diff <- max_score - maxScoreCard
+
+# Adding the difference to the biggest rounded group
+coefFrame[diff==min(diff)]$score_rounded <- coefFrame[diff==min(diff)]$score_rounded + diff
+
+# Getting the minum rounded error
+minScoreCard <- coefFrame[, .('minscore'=min(score_rounded)),  by='origFeature']
+minScoreCard <- sum(minScoreCard$minscore)
+diff <- min_score - minScoreCard
+
+# Adding the difference to the biggest rounded group
+coefFrame[diff==max(diff)]$score_rounded <- coefFrame[diff==max(diff)]$score_rounded + diff
+
+# Printing out the results
+print(coefFrame)
+```
+
+The final scorecard: 
+
+```{r final scorecard}
+scorecard <- coefFrame[order(origFeature, -score_rounded)] %>% 
+  .[, c('feature', 'score_rounded')]
+print(scorecard)
 ```
