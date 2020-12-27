@@ -1,0 +1,174 @@
+---
+title: "LGD"
+author: "Eligijus Bujokas"
+date: "12/27/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+library(betareg)
+library(data.table)
+library(pROC)
+library(ROCR)
+library(ggplot2)
+library(gridExtra)
+```
+
+# Reading data 
+
+```{r reading data}
+train <- fread('data/train.csv')
+test <- fread('data/test.csv')
+
+print(head(train))
+print(head(test))
+
+print(nrow(train))
+print(nrow(test))
+
+# Droping NA 
+train = na.omit(train)
+
+# Ensuring the correct data types 
+train$term <- as.factor(train$term)
+train$emp_length <- as.factor(train$emp_length)
+train$home_ownership <- as.factor(train$home_ownership)
+train$purpose <- as.factor(train$purpose)
+train$verification_status <- as.factor(train$verification_status)
+train$addr_state <- as.factor(train$addr_state)
+train$initial_list_status <- as.factor(train$initial_list_status)
+train$hardship_flag <- as.factor(train$hardship_flag)
+train$grade <- as.factor(train$grade)
+train$Y <- as.factor(train$Y)
+
+recovery_rate_Y <- function(x){
+  return(ifelse(x > 0, 1, 0))
+}
+
+# Creating the boolean value indicating whether the recovery rate is >0 or not 
+train$Y_recovery <- sapply(train$recovery_rate, recovery_rate_Y)
+train$Y_recovery <- as.factor(train$Y_recovery)
+
+summary(train)
+```
+
+# Recovery rate
+
+```{r recovery rate column}
+# Creating the boolean value indicating whether the recovery rate is >0 or not 
+train$Y_recovery <- sapply(train$recovery_rate, recovery_rate_Y)
+```
+
+# 1st stage LGD
+
+```{r recovery_1_0}
+colsModeling = c(
+  "term",
+  "pub_rec",
+  "annual_inc",
+  "dti",
+  "month_diff",
+  "emp_length",
+  "int_rate",
+  "loan_amnt",
+  'verification_status',
+  'delinq_2yrs',
+  'initial_list_status'
+)
+
+X <- train[, ..colsModeling]
+
+# Final feature list 
+featuresFinal = names(X)
+
+# Appending the Y
+X$Y <- train$Y_recovery
+
+modelLGD1 <- glm(Y ~ ., data=X, family=binomial(link='logit'))
+
+summary(modelLGD1)
+```
+
+# 2nd stage LGD
+
+```{r 2nd LGD}
+X <- train[recovery_rate>0, ..colsModeling]
+
+# Final feature list 
+featuresFinal = names(X)
+
+# Appending the Y
+X$Y <- train[recovery_rate>0]$recovery_rate
+
+# Fixing the upper range of recovery rate
+X$Y <- ifelse(X$Y==1, 0.999, X$Y)
+
+modelLGD2 <- betareg(Y ~ ., data=X)
+
+# Saving the coefficients
+LGD2coefs <- data.table(feature=names(modelLGD2$coefficients$mean), coef=modelLGD2$coefficients$mean)
+
+print(LGD2coefs)
+```
+
+# Testing out the models 
+
+## 1st stage
+
+```{r 1LGD test}
+Xtest <- test[, ..colsModeling]
+
+# Forecasting 
+yhat <- predict(modelLGD1, Xtest, type='response')
+  
+# Evaluating the results
+test$Y_recovery_rate <- recovery_rate_Y(test$recovery_rate)
+Xtest$Y <- recovery_rate_Y(test$recovery_rate)
+
+Xtest$yhat <- yhat
+
+# Getting the ROC statistic 
+ROC <- roc(Xtest$Y, Xtest$yhat)
+roc_stat <- ROC$auc
+print(paste("AUC score: ", roc_stat))
+print(paste("Gini score: ", 2 * roc_stat - 1))
+
+par(mfrow=c(2, 2))
+pred <- ROCR::prediction(Xtest$yhat, Xtest$Y)
+perf <- performance(pred, measure = "tpr", x.measure = "fpr")
+plot(perf, main='ROC plot')
+abline(b=1, a=0, col='blue')
+
+perf <- performance(pred, measure = "prec", x.measure = "cutoff")
+plot(perf, main='Precision plot')
+
+perf <- performance(pred, measure = "rec", x.measure = "cutoff")
+plot(perf, main='Recall plot')
+
+# Saving the indicator of 1 or 0 whether the recover rate is >0 or not 
+test$recovery_rate_indicator <- ifelse(yhat > 0.5, 1, 0)
+```
+
+## 2nd stage 
+
+```{r 2nd stage LGD}
+yhat_rate <- predict(modelLGD2, Xtest)
+
+# Saving to the test set 
+test$recovery_rate_hat <- yhat_rate
+
+# Ploting the residuals 
+hist(modelLGD2$residuals, breaks=40)
+
+# Calculating the final LGD recovery rates
+test$recovery_rate_hat_final <- test$recovery_rate_indicator * test$recovery_rate_hat
+
+# Getting the residulas
+test$res <- test$recovery_rate - test$recovery_rate_hat_final
+
+p1 <- ggplot(data=test[recovery_rate>0], aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('True distribution')
+p2 <- ggplot(data=test[recovery_rate_hat_final>0], aes(x=recovery_rate_hat_final)) + geom_histogram(fill='salmon1', color='black') + ggtitle('Predicted distribution')
+p3 <- ggplot(test, aes(x=res)) + geom_density() + ggtitle("Distribution of residuals")
+
+grid.arrange(p1, p2, p3, nrow = 1)
+```
