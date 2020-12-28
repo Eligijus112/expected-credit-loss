@@ -6,3 +6,5 @@ appl_accepted_20072019Q3.csv
 *.gzip
 test.csv
 train.csv
+test_defaults.csv
+train_defaults.csv

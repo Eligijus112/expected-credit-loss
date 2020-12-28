@@ -17,8 +17,8 @@ library(gridExtra)
 # Reading data 
 
 ```{r reading data}
-train <- fread('data/train.csv')
-test <- fread('data/test.csv')
+train <- fread('data/train_defaults.csv')
+test <- fread('data/test_defaults.csv')
 
 print(head(train))
 print(head(test))
@@ -39,7 +39,6 @@ train$addr_state <- as.factor(train$addr_state)
 train$initial_list_status <- as.factor(train$initial_list_status)
 train$hardship_flag <- as.factor(train$hardship_flag)
 train$grade <- as.factor(train$grade)
-train$Y <- as.factor(train$Y)
 
 recovery_rate_Y <- function(x){
   return(ifelse(x > 0, 1, 0))
@@ -50,13 +49,6 @@ train$Y_recovery <- sapply(train$recovery_rate, recovery_rate_Y)
 train$Y_recovery <- as.factor(train$Y_recovery)
 
 summary(train)
-```
-
-# Recovery rate
-
-```{r recovery rate column}
-# Creating the boolean value indicating whether the recovery rate is >0 or not 
-train$Y_recovery <- sapply(train$recovery_rate, recovery_rate_Y)
 ```
 
 # 1st stage LGD
@@ -166,9 +158,11 @@ test$recovery_rate_hat_final <- test$recovery_rate_indicator * test$recovery_rat
 # Getting the residulas
 test$res <- test$recovery_rate - test$recovery_rate_hat_final
 
-p1 <- ggplot(data=test[recovery_rate>0], aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('True distribution')
-p2 <- ggplot(data=test[recovery_rate_hat_final>0], aes(x=recovery_rate_hat_final)) + geom_histogram(fill='salmon1', color='black') + ggtitle('Predicted distribution')
+p1 <- ggplot(data=test, aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('True distribution')
+p2 <- ggplot(data=test, aes(x=recovery_rate_hat_final)) + geom_histogram(fill='salmon1', color='black') + ggtitle('Predicted distribution')
 p3 <- ggplot(test, aes(x=res)) + geom_density() + ggtitle("Distribution of residuals")
 
 grid.arrange(p1, p2, p3, nrow = 1)
+
+print(paste("MAE:", sum(abs(test$res))/nrow(test)))
 ```

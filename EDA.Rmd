@@ -268,33 +268,37 @@ clean_hardship <- function(x){
 d$hardship_flag <- sapply(d$hardship_flag, clean_hardship)
 ```
 
+
+# LGD and EAD variables
+
+The data for modeling is all charged off loans. 
+
+```{r charged_off}
+loan_default_data = d[loan_status %in% c("Charged Off", "Does not meet the credit policy. Status:Charged Off")]
+```
+
 ## LGD independant variable - recovery rate
 
 ```{r recovery rate, warning=FALSE}
-d[, recovery_rate:=recoveries/funded_amnt]
-d[, recovery_rate:=ifelse(recovery_rate>1, 1, recovery_rate)]
+loan_default_data[, recovery_rate:=recoveries/funded_amnt]
+loan_default_data[, recovery_rate:=ifelse(recovery_rate>1, 1, recovery_rate)]
 
 # Ploting the recovery rate distribution
-p1 <- ggplot(data=d, aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Full data')
+p1 <- ggplot(data=loan_default_data, aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Full data')
 
-# Ploting the recovery rate distribution without the recovery rate of 0
-p2 <- ggplot(data=d[recovery_rate>0], aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Without 0')
-
-grid.arrange(p1, p2, nrow = 1)
+p1
 ```
+
 
 ## EAD independant variable - credit conversion factor
 
 ```{r credit conversion factor, warning=FALSE}
-d[, CCF:=(funded_amnt - total_rec_prncp)/funded_amnt]
+loan_default_data[, CCF:=(funded_amnt - total_rec_prncp)/funded_amnt]
 
 # Ploting the recovery rate distribution
-p1 <- ggplot(data=d, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Full data')
+p1 <- ggplot(data=loan_default_data, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Full data')
 
-# Ploting the recovery rate distribution without the recovery rate of 0
-p2 <- ggplot(data=d[CCF>0], aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Without 0')
-
-grid.arrange(p1, p2, nrow = 1)
+p1
 ```
 
 # Spliting the data into train and test sets
@@ -317,8 +321,6 @@ final_cols = c(
   "int_rate",
   "dti",
   "month_diff",
-  "recovery_rate",
-  "CCF",
   "verification_status",
   "delinq_2yrs",
   "initial_list_status",
@@ -326,14 +328,20 @@ final_cols = c(
   "grade"
 )
 
-dt = sort(sample(nrow(d), nrow(d)*.75))
-
 train <- d[issue_d_formated < zoo::as.yearmon('2016-01'), ..final_cols]
 test <- d[issue_d_formated >= zoo::as.yearmon('2016-01'), ..final_cols]
 
-# Saving the data 
+# Saving the data for PD  
 write.csv(na.omit(train), 'data/train.csv', row.names=FALSE)
 write.csv(na.omit(test), 'data/test.csv', row.names=FALSE)
+
+# Saving the data for LGD and EAD 
+train <- loan_default_data[issue_d_formated < zoo::as.yearmon('2016-01')]
+test <- loan_default_data[issue_d_formated >= zoo::as.yearmon('2016-01')]
+
+# Saving the data for PD  
+write.csv(na.omit(train), 'data/train_defaults.csv', row.names=FALSE)
+write.csv(na.omit(test), 'data/test_defaults.csv', row.names=FALSE)
 ```
 
 # Removing objects from memory
