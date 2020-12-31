@@ -35,7 +35,6 @@ The data has information about all approved loans from 2007 up until 2019 3th qu
 ```{r "Reading data"}
 # Using fread to read the data
 d <- fread('data/Loan_status_2007-2020Q3.gzip')
-#d <- fread('data/loan_data_2007_2014.csv')
   
 # Total number of loans in the data set
 print(nrow(d))
@@ -167,10 +166,11 @@ loan_n = d[, .N, by="issue_d_formated"] %>%
   setnames(., c('N', 'N_y'), c('loans_monthly', 'loans_yearly'))
 
 # Ploting the time series
-p1 <- ggplot(data=loan_n, aes(x=issue_d_formated, y=loans_monthly)) + geom_bar(stat="identity", fill="steelblue", color='black') + ggtitle('Monthly count of issued loans')
-p2 <- ggplot(data=unique(loan_n[, .(issue_year, loans_yearly)]), aes(x=issue_year, y=loans_yearly)) + geom_bar(stat="identity", fill="steelblue", color='black') + ggtitle('Yearly count of issued loans')
+p1 <- ggplot(data=loan_n, aes(x=issue_d_formated, y=loans_monthly)) +
+  geom_bar(stat="identity", fill="steelblue", color='black') + 
+  ggtitle('Monthly count of issued loans')
 
-grid.arrange(p1, p2, ncol = 1)
+p1
 ```
 
 ## Creating the Y variable 
@@ -189,8 +189,14 @@ d[, Y:=create_Y(loan_status)]
 
 # Saving the variable as factor
 d$Y <- as.factor(d$Y)
+```
 
-# Visualizing the di stribution of Y 
+```{r subset}
+d <- d[issue_d_formated < zoo::as.yearmon('2019-01')]
+
+print(nrow(d))
+
+# Visualizing the distribution of Y 
 bymonth <- d[, .N, by=c("issue_d_formated", "Y")] %>% 
   cast(., issue_d_formated ~ Y, value="N") %>% 
   data.table(.) %>% 
@@ -200,11 +206,19 @@ bymonth <- d[, .N, by=c("issue_d_formated", "Y")] %>%
 ggplot(data=bymonth, aes(x=issue_d_formated, y=rate)) + geom_area(color="darkblue", fill="lightblue")
 ```
 
-After some investigation online and inspecting the drastic decrease in bad loan count since 2016, we will only keep the reliable data up until the end of 2016.
+Issued loans by grade
 
-```{r subset}
-d <- d[issue_d_formated < zoo::as.yearmon('2017-01')]
-print(nrow(d))
+```{r}
+share_by_grade = d[, .("total_issued_grade" = .N), by=c('issue_d_formated', 'grade')]
+total_issued = d[, .("total_issued" = .N), by='issue_d_formated']
+
+# Merging the information 
+merged = merge(share_by_grade, total_issued, all.x=TRUE)
+
+# Calculating the share
+merged[, share:=total_issued_grade/total_issued]
+
+ggplot(data=merged, aes(x=issue_d_formated, y=share, fill=grade)) + geom_bar(position="stack", stat="identity", color='black')
 ```
 
 ## Summary statistics of numeric features
@@ -328,16 +342,16 @@ final_cols = c(
   "grade"
 )
 
-train <- d[issue_d_formated < zoo::as.yearmon('2016-01'), ..final_cols]
-test <- d[issue_d_formated >= zoo::as.yearmon('2016-01'), ..final_cols]
+train <- d[issue_d_formated < zoo::as.yearmon('2018-01'), ..final_cols]
+test <- d[issue_d_formated >= zoo::as.yearmon('2018-01'), ..final_cols]
 
 # Saving the data for PD  
 write.csv(na.omit(train), 'data/train.csv', row.names=FALSE)
 write.csv(na.omit(test), 'data/test.csv', row.names=FALSE)
 
 # Saving the data for LGD and EAD 
-train <- loan_default_data[issue_d_formated < zoo::as.yearmon('2016-01')]
-test <- loan_default_data[issue_d_formated >= zoo::as.yearmon('2016-01')]
+train <- loan_default_data[issue_d_formated < zoo::as.yearmon('2018-01')]
+test <- loan_default_data[issue_d_formated >= zoo::as.yearmon('2018-01')]
 
 # Saving the data for PD  
 write.csv(na.omit(train), 'data/train_defaults.csv', row.names=FALSE)

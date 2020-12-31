@@ -397,13 +397,13 @@ colsModeling = c(
   "month_diff_groups",
   "emp_length_groups",
   "int_rate_groups",
-  "loan_amnt_groups"
+  "loan_amnt_groups",
   #'addr_state_groups',
   #'verification_status'
   #'delinq_2yrs_groups',
   #'initial_list_status',
   #'hardship_flag',
-  #'grade'
+  'grade'
 )
 
 X = train[, ..colsModeling]
@@ -419,7 +419,7 @@ refCols <- c(
   "dti_groups:30+",
   "emp_length_groups:< 1 year",
   "int_rate_groups:25+",
-  #"grade:G",
+  "grade:G",
   "loan_amnt_groups:22000+",
   "pub_rec_groups:>0",
   "month_diff_groups:[0, 70)"

@@ -1,0 +1,252 @@
+---
+title: "Expected credit loss"
+author: "Eligijus Bujokas"
+date: "01/07/2021"
+output: 
+  ioslides_presentation:
+   transition: slower
+   logo: presentation/scorify.jpg
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE)
+library(knitr)    # For knitting document and include_graphics function
+library(ggplot2)  # For plotting
+library(png)
+library(data.table)
+library(stringr)
+library(reshape)
+library(gridExtra)
+Sys.setlocale("LC_ALL","C")
+```
+
+## Aim of this presentation
+
+The aim of this presentation is to model and present the various techniques of working with expected credit losses using real life data.
+
+The subject in this presentation will be one of the biggest short term loan lenderer in US: **Lending Club**.
+
+```{r fig.width = 4, fig.align='center'}
+include_graphics("presentation/lending-club.png")
+```
+
+## Acknowledgment
+
+All the logic and models are presented in the course https://www.udemy.com/course/credit-risk-modeling-in-python
+
+The presenter of the material is Nikolay G. Georgiev, PhD from the Norwegian Business School.
+
+The data is taken from kaggle https://www.kaggle.com/ethon0426/lending-club-20072020q1
+
+Lending club website https://www.lendingclub.com/
+
+## Expected credit loss 
+
+$$ \mathbb E[CL] = \mathbb E[PD] \mathbb E[LGD] \mathbb E[EAD]  $$
+CL - Credit losses
+
+PD - Probability of default 
+
+LGD - Losses given default
+
+EAD - Exposure at default
+
+## Exploring the data 
+
+The data is monthly spanning from 2008 January up until 2018 December (included).
+
+```{r include=FALSE}
+# Using fread to read the data
+d <- fread('data/Loan_status_2007-2020Q3.gzip')
+
+# Fixing the dates
+# Creating the splited columns 
+d[, c("issue_m", "issue_y"):=tstrsplit(issue_d, "-")]
+
+# Getting the last two digits of issue_y
+d[, issue_y:=str_sub(issue_y, -2)]
+
+# Creating the formated column
+d[, issue_d_formated:=zoo::as.yearmon(paste(issue_m, issue_y, sep="-"), "%b-%y")]
+
+# Subseting the data 
+d <- d[issue_d_formated < zoo::as.yearmon('2019-01')]
+
+# Aggregating by issue date and sorting
+loan_n = d[, .('loans_monthly' = .N), by="issue_d_formated"] %>% 
+  .[order(issue_d_formated)]
+```
+```{r}
+# Ploting the time series
+ggplot(data=loan_n, aes(x=issue_d_formated, y=loans_monthly)) +
+  geom_bar(stat="identity", fill="steelblue", color='black') + 
+  ggtitle('Monthly count of issued loans') + 
+  labs(x='month', y='loan count')
+```
+
+## Loan status 
+
+There is a feature in the data called **loan_status**. The values can be: 
+
+
+```{r}
+d[, .N, by="loan_status"] %>% 
+  .[order(N)]
+```
+
+## Bad loans
+
+```{r}
+# Function to encode the good loans as 1 and 0 as bad loans
+create_Y <- function(x, bad_loans=c('Late (31-120 days)', "Default", "Charged Off", "Does not meet the credit policy. Status:Charged Off")){
+  return(ifelse(is.element(x, bad_loans), 'bad', 'good'))
+}
+
+# Creating the Y variable
+d[, Y:=create_Y(loan_status)]
+
+# Saving the variable as factor
+d$Y <- as.factor(d$Y)
+
+# Visualizing the distribution of Y 
+bymonth <- d[, .N, by=c("issue_d_formated", "Y")] %>% 
+  cast(., issue_d_formated ~ Y, value="N") %>% 
+  data.table(.) %>% 
+  .[, rate:=bad * 100/(bad + good)]
+
+# Calculating the shares
+ggplot(data=bymonth, aes(x=issue_d_formated, y=rate)) + 
+  geom_area(color="darkblue", fill="lightblue") + 
+  labs(x='month', y='default_rate') + 
+  ggtitle('Default rate per month')
+```
+
+## Distribution by grade
+
+```{r}
+share_by_grade = d[, .("total_issued_grade" = .N), by=c('issue_d_formated', 'grade')]
+total_issued = d[, .("total_issued" = .N), by='issue_d_formated']
+
+# Merging the information 
+merged = merge(share_by_grade, total_issued, all.x=TRUE)
+
+# Calculating the share
+merged[, share:=total_issued_grade/total_issued]
+
+ggplot(data=merged, aes(x=issue_d_formated, y=share, fill=grade)) + geom_bar(position="stack", stat="identity", color='steelblue')
+```
+
+## The Basel Accords
+
+The Basel II accord, which was signed in 2004, defined three strict guidelines:
+
+* How much capital banks need to have
+
+* How capital is defined
+
+* How capital is compared against risk-weighted assets
+
+One of the main takeouts from both the basel II and subsequent basel III accords is that 
+
+**The greater the risk a bank is exposed to, the greater the amount of capital it needs to hold**
+
+
+## Probability of default (PD)
+
+This is the most strict part of the three components of ECL and must follow certain rules in modeling. Every feature, both categorical and numeric, needs to be transformed into dummy variables.
+
+To infer what categorical feature values are the most influential in determining bad loan from a good loan we can use the weight of evidence (WOE for short) criteria. For a feature $i$ and the feature level $j$ the $WOE_{i, j}$ is calculated with the following formula:
+
+$$WOE_{i, j} = log \left(\dfrac{P(X_{i}=j|Y=1)}{P(X_{i} = j|Y=0)}\right)$$
+
+## WOE example
+
+```{r woe, include=FALSE}
+woe <- function(feature, data){
+  # Grouping by the feature and getting the total number of observations in each level
+  woeTable <- data[, .N, by=c("Y", feature)] %>% 
+    # Seting the names 
+    setnames(., c('Y', 'feature', 'N')) %>% 
+    # Ommiting NA
+    na.omit(.) %>% 
+    # Casting so that Y is in the columns
+    cast(., feature ~ Y, value="N") %>% 
+    # Converting back to data.table
+    data.table(.) %>% 
+    # Filling the missing values with 0 
+    setnafill(., fill=0, cols=c('good', 'bad')) %>%
+    # Getting the proportions of good and bad borrowers in each level of the variable
+    .[, c('prop_good', 'prop_bad') := list(good/sum(good), bad/sum(bad))] %>% 
+    # Calculating the WOE statistic 
+    .[, woe:=log(prop_good/prop_bad)] %>% 
+    # Sorting by the woe stat
+    .[order(woe, decreasing=TRUE)]
+  
+  return(woeTable)
+}
+
+plotWoe <- function(ft, woeData){
+  p <- ggplot(woeData, aes(x=reorder(feature, woe), y=woe)) + 
+            geom_bar(stat="identity", fill="steelblue", color='black') + 
+            ggtitle(ft) + 
+            labs(x='Feature value') +
+            coord_flip()
+   return(p)
+}
+
+capvalues <- function(x, cap){
+  return(min(c(x, cap)))
+}
+```
+
+```{r}
+# Droping the outliers
+d$dti_c <- sapply(d$dti, capvalues, cap=30)
+
+# Cutting the annual income into 10 equal sized partitions
+d$dti_groups = cut(d$dti_c, 8)
+
+woedf <- woe('dti_groups', d)
+print(woedf)
+```
+
+## Annual income 
+
+```{r}
+adj_income <- function(x){
+  if(!is.na(x)){
+    if(x < 30000){
+      return("[0,30)")
+    } else if (x < 60000){
+      return("[30,60)")
+    } else if (x < 100000){
+      return("[60,100)")
+    } else if (x < 200000){
+      return("[100,200)")
+    } else {
+      return("200+")
+    }
+  } else {
+    return(NA)
+  }
+}
+
+d$annual_inc_groups <- sapply(d$annual_inc, adj_income)
+
+woedf <- woe('annual_inc_groups', d)
+plotWoe('Final annual income splits', woedf)
+```
+
+## Some more features
+
+```{r some more features}
+cat_vars <- c( "grade", "home_ownership", 'initial_list_status', 'verification_status')
+plots <- list()
+
+for(cat_var in cat_vars){
+  woeStat <- woe(cat_var, d)
+  plots[[cat_var]] <- plotWoe(cat_var, woeStat)
+}
+
+grid.arrange(plots$grade, plots$home_ownership, plots$initial_list_status, plots$verification_status, ncol = 2, nrow=2)
+```

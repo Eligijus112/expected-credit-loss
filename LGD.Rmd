@@ -65,7 +65,8 @@ colsModeling = c(
   "loan_amnt",
   'verification_status',
   'delinq_2yrs',
-  'initial_list_status'
+  'initial_list_status',
+  'grade'
 )
 
 X <- train[, ..colsModeling]
