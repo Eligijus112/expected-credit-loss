@@ -442,6 +442,13 @@ X$Y <- ifelse(train$Y=='good', 1, 0)
 ```{r logistic}
 model <- glm(Y ~ ., data=X, family=binomial(link='logit'))
 
+# Creating the coef frame 
+coefFrame <- data.table('feature'=names(model$coefficients), 'coef'=model$coefficients)
+coefFrame$feature <- gsub('`', '', coefFrame$feature)
+
+# Saving the coef frame
+write.csv(coefFrame, "modelPD.csv")
+
 summary(model)
 ```
 
@@ -479,6 +486,12 @@ yhat <- 1/(1 + exp(-product))
 
 ```{r inspecting the results}
 test$yhat <- yhat
+
+colsForLater <- c("Y", "yhat")
+
+# Saving an object for the presentation
+testPD <- test[, ..colsForLater]
+write.csv(testPD, "PDresults.csv")
 
 # Getting the ROC statistic 
 ROC <- roc(test$Y, test$yhat)
