@@ -11,3 +11,8 @@ train_defaults.csv
 .Rhistory
 modelPD.csv
 PDresults.csv
+EADresults.csv
+LGDresults.csv
+test-all-EAD.csv
+test-all-LGD.csv
+test-all-PD.csv

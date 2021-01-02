@@ -28,14 +28,14 @@ ui <- fluidPage(
                        "Range for beta_0",
                        min=-20,
                        max=20,
-                       value=c(-4, 4)
+                       value=c(-20, 20)
                        ),
            
            sliderInput("beta_1_range",
                        "Range for beta_1",
                        min=-20,
                        max=20,
-                       value=c(-4, 4)
+                       value=c(-20, 20)
            ),
            
            sliderInput("granularity",

@@ -20,86 +20,67 @@ library(gridExtra)
 train <- fread('data/train_defaults.csv')
 test <- fread('data/test_defaults.csv')
 
-print(head(train))
-print(head(test))
+featuresML <- fread('data/featuresMLbeta.csv') %>% 
+  na.omit(.) 
+featuresML <- featuresML$V2
 
-print(nrow(train))
-print(nrow(test))
+# Dropping values that are out of range
+train <- train[(CCF< 1) & (CCF>0)]
+test <- test[(CCF < 1) & (CCF>0)]
 
-# Droping NA 
-train = na.omit(train)
-
-# Ensuring the correct data types 
-train$term <- as.factor(train$term)
-train$emp_length <- as.factor(train$emp_length)
-train$home_ownership <- as.factor(train$home_ownership)
-train$purpose <- as.factor(train$purpose)
-train$verification_status <- as.factor(train$verification_status)
-train$addr_state <- as.factor(train$addr_state)
-train$initial_list_status <- as.factor(train$initial_list_status)
-train$hardship_flag <- as.factor(train$hardship_flag)
-train$grade <- as.factor(train$grade)
-
-summary(train)
+# Removing some additional outliers from the dataset
+train <- train[(dti<50) & (annual_inc <200000)]
 ```
 
 # Creating the model 
 
 ```{r}
-colsModeling = c(
-  "term",
-  "pub_rec",
-  "annual_inc",
-  "dti",
-  "month_diff",
-  "emp_length",
-  "int_rate",
-  "loan_amnt",
-  'verification_status',
-  'delinq_2yrs',
-  'initial_list_status'
-)
+X = train[, ..featuresML]
 
-X <- train[, ..colsModeling]
+# Converting to factors 
+X$grade <- as.factor(X$grade)
+X$pub_recg <- as.factor(X$pub_recg)
+X$term <- as.factor(X$term)
 
-# Final feature list 
-featuresFinal = names(X)
-
-# Appending the Y
+# Adding the Y variable
 X$Y <- train$CCF
+```
 
-X$Y <- ifelse(X$Y==1, 0.999, X$Y)
-X$Y <- ifelse(X$Y==0, 0.001, X$Y)
+## Creating the model 
 
-modelEAD <- betareg(Y ~ ., data=X)
+```{r}
+modelEAD<- betareg(Y ~ ., data=X)
 
-# Saving the coefficients
-EADcoefs <- data.table(feature=names(modelEAD$coefficients$mean), coef=modelEAD$coefficients$mean)
+# Creating the coef frame 
+coefFrame <- data.table('feature'=names(modelLGD$coefficients$mean), 'coef'=modelLGD$coefficients$mean)
+coefFrame$feature <- gsub('`', '', coefFrame$feature)
 
-print(EADcoefs)
+# Saving the coef frame
+write.csv(coefFrame, "modelEAD.csv")
+
+summary(modelEAD, type='pearson')
 ```
 
 ## Measuring results
 
 ```{r}
-Xtest <- test[, ..colsModeling]
+Xtest <- test[, ..featuresML]
 
-yhat_rate <- predict(modelEAD, Xtest)
+yhat <- predict(modelEAD, Xtest)
 
 # Saving to the test set 
-test$CCF_hat <- yhat_rate
+test$CCF_hat <- yhat
 
-# Calculating the residuals
-test$res <- test$CCF - test$CCF_hat
+cols_to_use <- c("CCF", "CCF_hat")
 
-# Ploting the residuals 
-hist(modelEAD$residuals, breaks=40)
+write.csv(test[, ..cols_to_use], "EADresults.csv")
+```
 
-p1 <- ggplot(data=test, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('True distribution')
-p2 <- ggplot(data=test, aes(x=CCF_hat)) + geom_histogram(fill='salmon1', color='black') + ggtitle('Predicted distribution')
-p3 <- ggplot(test, aes(x=res)) + geom_density() + ggtitle("Distribution of residuals")
+## Testing on all dataset
 
-grid.arrange(p1, p2, p3, nrow = 1)
+```{r}
+testAll <- fread('data/test.csv')
+testAll$CCF_hat <- predict(modelEAD, testAll)
 
-print(paste("MAE:", sum(abs(test$res))/nrow(test)))
+write.csv(testAll[,c('CCF', 'CCF_hat')], 'test-all-EAD.csv')
 ```

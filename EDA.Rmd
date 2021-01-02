@@ -180,12 +180,12 @@ p1
 print(unique(d$loan_status))
 
 # Function to encode the good loans as 1 and 0 as bad loans
-create_Y <- function(x, bad_loans=c('Late (31-120 days)', "Default", "Charged Off", "Does not meet the credit policy. Status:Charged Off")){
+create_Ypd <- function(x, bad_loans=c('Late (31-120 days)', "Default", "Charged Off", "Does not meet the credit policy. Status:Charged Off")){
   return(ifelse(is.element(x, bad_loans), 'bad', 'good'))
 }
 
 # Creating the Y variable
-d[, Y:=create_Y(loan_status)]
+d[, Y:=create_Ypd(loan_status)]
 
 # Saving the variable as factor
 d$Y <- as.factor(d$Y)
@@ -315,53 +315,465 @@ p1 <- ggplot(data=loan_default_data, aes(x=CCF)) + geom_histogram(fill='steelblu
 p1
 ```
 
-# Spliting the data into train and test sets
+# Creating the datasets for further modeling 
 
-We will split the data into a 75% - 25% train and test data split.
+## Spliting to train and test sets
 
-```{r train_test_split}
-final_cols = c(
-  "issue_d",
-  "addr_state",
+```{r}
+train <- d[issue_d_formated < zoo::as.yearmon('2018-01')]
+test <- d[issue_d_formated >= zoo::as.yearmon('2018-01')]
+```
+
+## Weight of evidence
+
+To infer what categorical feature values are the most influential in determining bad loan from a good loan we can use the weight of evidence (WOE for short) criteria. For a feature $i$ and the feature level $j$ the $WOE_{i, j}$ is calculated with the following formula:
+
+$$WOE_{i, j} = log \left(\dfrac{P(X_{i}=j|Y=1)}{P(X_{i} = j|Y=0)}\right)$$
+Lets define a function in R that calculates the WOE statistic for any given feature. Note, that the dependent variable needs to be called **Y**.
+
+```{r woe}
+woe <- function(feature, data){
+  # Grouping by the feature and getting the total number of observations in each level
+  woeTable <- data[, .N, by=c("Y", feature)] %>% 
+    # Seting the names 
+    setnames(., c('Y', 'feature', 'N')) %>% 
+    # Casting so that Y is in the columns
+    cast(., feature ~ Y, value="N") %>% 
+    # Converting back to data.table
+    data.table(.) %>% 
+    # Filling the missing values with 0 
+    setnafill(., fill=0, cols=c('good', 'bad')) %>%
+    # Getting the proportions of good and bad borrowers in each level of the variable
+    .[, c('prop_good', 'prop_bad') := list(good/sum(good), bad/sum(bad))] %>% 
+    # Calculating the WOE statistic 
+    .[, woe:=log(prop_good/prop_bad)] %>% 
+    # Sorting by the woe stat
+    .[order(woe, decreasing=TRUE)]
+  
+  return(woeTable)
+}
+
+# Example of the function output:
+woeResult = woe('purpose', train)
+print(woeResult)
+
+# Defining a function to plot the woe 
+plotWoe <- function(ft, woeData){
+  p <- ggplot(woeData, aes(x=reorder(feature, woe), y=woe)) + 
+            geom_bar(stat="identity", fill="steelblue", color='black') + 
+            ggtitle(ft) + 
+            labs(x='Feature value') +
+            coord_flip()
+   return(p)
+}
+```
+
+## Iterating through all categorical features 
+
+The initial weight of evidence plots:
+
+```{r}
+cat_vars <- c("purpose", "emp_length", "grade", "home_ownership", 'initial_list_status', 'verification_status')
+plots <- list()
+
+for(cat_var in cat_vars){
+  woeStat <- woe(cat_var, train)
+  plots[[cat_var]] <- plotWoe(cat_var, woeStat)
+}
+
+grid.arrange(plots$purpose, plots$emp_length, plots$grade, plots$home_ownership, plots$initial_list_status, plots$verification_status, ncol = 3, nrow=3)
+```
+
+```{r adjusting the addr_state variable}
+adj_addr_state <- function(x){
+  if (is.element(x, c('DC', 'VT', 'NH'))){
+    return("DC:VT:NH")
+  } else if (is.element(x, c('ME', 'CO', 'WV', 'WY', 'WA', 'SC', 'KS'))){
+    return("ME:CO:WV:WY:WA:SC:KS")
+  } else if (is.element(x, c('ND', 'NM', 'SD', 'TN', 'LA', 'NV'))){
+    return("ND:NM:SD:TN:LA:NV")
+  } else if (is.element(x, c("OK", 'AL', 'AR', 'MS', 'NE'))){
+    return('OK:AL:AR:MS:NE')
+  } else {
+    return("other")
+  }
+}
+
+train$addr_state_groups <- sapply(train$addr_state, adj_addr_state)
+
+woeStat <- woe('addr_state_groups', train)
+p <- plotWoe('addr_state_groups', woeStat)
+p
+```
+
+```{r adjusting the purpose variable}
+adj_purpose <- function(x){
+  if (is.element(x, c('wedding', 'car'))){
+    return("wedding:car")
+  } else if (is.element(x, c('credit_card', 'home_improvement'))){
+    return("credit_card:home_improvemenet")
+  } else if (is.element(x, c('small_business'))){
+    return("small_business")
+  } else if (is.element(x, c('renewable_energy', "educational", "moving"))){
+    return('renewable_energy:educ:moving')
+  } else {
+    return("other")
+  }
+}
+
+train$purpose_groups <- sapply(train$purpose, adj_purpose)
+
+woeStat <- woe('purpose_groups', train)
+p <- plotWoe('addr_state_groups', woeStat)
+p
+```
+
+As we can see from the plots, the only adjustment will be needed to emp_length variable. 
+
+```{r adjust emp_length}
+adj_emp_length <- function(x){
+  if(is.element(x, ("< 1 year"))){
+    return("< 1 year")
+  } else if (x=='1 year') {
+    return ('1 year')
+  } else if (is.element(x, c('2 years', '3 years', '4 years'))){
+    return ('2-4 years')
+  } else if (is.element(x, c('5 years', '6 years', '7 years')))(
+    return('5-7 years')
+  ) else if (is.element(x, c('8 years', '9 years'))){
+    return('8-9 years') 
+  } else {
+    return('10+ years')
+  }
+}
+
+train$emp_length_groups <- sapply(train$emp_length, adj_emp_length)
+
+woeStat <- woe('emp_length_groups', train)
+p <- plotWoe('emp_length_groups', woeStat)
+p
+```
+
+## Annual income
+
+```{r}
+capvalues <- function(x, cap){
+  return(min(c(x, cap)))
+}
+
+plotWoeNumeric <- function(ft, woeData){
+  p <- ggplot(woeData, aes(x=feature, y=woe)) + 
+            geom_bar(stat="identity", fill="steelblue", color='black') + 
+            ggtitle(ft) + 
+            labs(x='Feature value') +
+            coord_flip()
+   return(p)
+}
+
+# Droping the outliers
+train$annual_inc_c <- sapply(train$annual_inc, capvalues, cap=300000)
+
+# Ploting the distribution
+ggplot(data=train, aes(x=annual_inc_c)) + geom_density(fill='blue')
+
+# Cutting the annual income into 10 equal sized partitions
+train$annual_inc_groups = cut(train$annual_inc_c / 1000, 10)
+
+woedf <- woe('annual_inc_groups', train)
+plotWoeNumeric('annual_income', woedf)
+```
+
+Defining a function for annual income split. 
+
+```{r final_income}
+adj_income <- function(x){
+  if(x < 30000){
+    return("[0,30)")
+  } else if (x < 60000){
+    return("[30,60)")
+  } else if (x < 100000){
+    return("[60,100)")
+  } else if (x < 200000){
+    return("[100,200)")
+  } else {
+    return("200+")
+  }
+}
+
+train$annual_inc_groups <- sapply(train$annual_inc, adj_income)
+
+woedf <- woe('annual_inc_groups', train)
+plotWoe('Final annual income splits', woedf)
+```
+
+## Loan amount
+
+```{r loan_amnt}
+# Cutting the annual income into 10 equal sized partitions
+train$loan_amnt_groups = cut(train$loan_amnt/1000, 10)
+
+woedf <- woe('loan_amnt_groups', train)
+plotWoeNumeric('loan_amnt_groups ', woedf)
+```
+
+```{r loan_amnt adj}
+adj_loan_amnt <- function(x){
+  if (x < 8000) {
+    return("[0,8000)")
+  } else if(x < 11000){
+    return("[8000, 11000)")
+  } else if(x < 22000){
+    return("[11000, 22000)")
+  } else {
+    return("22000+")
+  }
+}
+
+train$loan_amnt_groups = sapply(train$loan_amnt, adj_loan_amnt)
+woedf <- woe('loan_amnt_groups', train)
+plotWoe('loan_amnt_groups', woedf)
+```
+
+
+## Interest rate
+
+```{r interest_rate}
+adj_int_rate <- function(x){
+  if (x < 10) {
+    return("[0,10)")
+  } else if(x < 15){
+    return("[10, 15)")
+  } else if(x < 25){
+    return("[15, 25)")
+  } else {
+    return("25+")
+  }
+}
+
+train$int_rate_groups = sapply(train$int_rate, adj_int_rate)
+woedf <- woe('int_rate_groups', train)
+plotWoe('int_rate_groups', woedf)
+```
+
+## Past 2 year delinquencies
+
+```{r}
+adj_delinq_2yrs <- function(x){
+  if(x == 0){
+    return('0')
+  } else if (x < 4){
+    return('[1, 3]')
+  } else {
+    return('4+')
+  }
+}
+
+train$delinq_2yrs_groups <- sapply(train$delinq_2yrs, adj_delinq_2yrs)
+  
+woedf <- woe('delinq_2yrs_groups', train)
+plotWoe('delinq_2yrs_groups', woedf)
+```
+
+## DTI 
+
+```{r}
+# Droping the outliers
+train$dti_c <- sapply(train$dti, capvalues, cap=40)
+
+# Ploting the distribution
+ggplot(data=train, aes(x=dti_c)) + geom_density(fill='blue')
+
+# Cutting the annual income into 10 equal sized partitions
+train$dti_groups = cut(train$dti_c, 7)
+
+woedf <- woe('dti_groups', train)
+plotWoeNumeric('dti', woedf)
+```
+
+```{r final_dti}
+adj_dti <- function(x){
+  if(x < 11){
+    return("[0,11)")
+  } else if (x < 17){
+    return("[11,17)")
+  } else if (x < 30){
+    return("[17,30)")
+  } else {
+    return("30+")
+  } 
+}
+
+train$dti_groups <- sapply(train$dti, adj_dti)
+
+woedf <- woe('dti_groups', train)
+plotWoe('Final dti splits', woedf)
+```
+
+## Public records
+
+```{r public record}
+adj_pub_rec <- function(x){
+  if(x==0){
+    return("0")
+  } else {
+    return(">0")
+  }
+}
+
+train$pub_rec_groups = sapply(train$pub_rec, adj_pub_rec)
+
+woedf <- woe('pub_rec_groups', train)
+plotWoeNumeric('pub_rec_groups', woedf)
+```
+
+## Month differences between loan and cr line
+
+```{r month_diff}
+# Ploting the distribution
+ggplot(data=train, aes(x=month_diff)) + geom_density(fill='blue')
+
+# Cutting the annual income into 10 equal sized partitions
+train$month_diff_groups = cut(train$month_diff , 10)
+
+woedf <- woe('month_diff_groups', train)
+plotWoeNumeric('month_diff_groups', woedf)
+```
+
+```{r final_month_diff}
+adj_month_diff <- function(x){
+  if(x<70){
+    return("[0, 70)")
+  } else if (x < 180){
+    return("[70, 180)")
+  } else if (x < 240) {
+    return("[180, 240)")
+  } else {
+    return("240+")
+  }
+}
+
+train$month_diff_groups = sapply(train$month_diff, adj_month_diff)
+
+woedf <- woe('month_diff_groups', train)
+plotWoe('month_diff_groups', woedf)
+```
+
+# Creating the final test and train frames 
+
+```{r}
+# Subseting the data
+train <- d[issue_d_formated < zoo::as.yearmon('2018-01')]
+test <- d[issue_d_formated >= zoo::as.yearmon('2018-01')]
+
+# Creating the Y variables for modeling
+train$Ypd <- sapply(train$loan_status, create_Ypd)
+test$Ypd <- sapply(test$loan_status, create_Ypd)
+
+train[, recovery_rate:=recoveries/funded_amnt]
+train[, recovery_rate:=ifelse(recovery_rate>1, 1, recovery_rate)]
+
+test[, recovery_rate:=recoveries/funded_amnt]
+test[, recovery_rate:=ifelse(recovery_rate>1, 1, recovery_rate)]
+
+train[, CCF:=(funded_amnt - total_rec_prncp)/funded_amnt]
+test[, CCF:=(funded_amnt - total_rec_prncp)/funded_amnt]
+
+# Train set adjustmetns
+train$pub_recg <- sapply(train$pub_rec, adj_pub_rec)
+train$annual_incg <- sapply(train$annual_inc, adj_income)
+train$dtig <- sapply(train$dti, adj_dti)
+train$month_diffg <- sapply(train$month_diff, adj_month_diff)
+train$emp_lengthg <- sapply(train$emp_length, adj_emp_length)
+train$int_rateg <- sapply(train$int_rate, adj_int_rate)
+train$loan_amntg <- sapply(train$loan_amnt, adj_loan_amnt)
+train$addr_stateg <- sapply(train$addr_state, adj_addr_state)
+train$purposeg <- sapply(train$purpose, adj_purpose)
+
+# Test set adjustments
+test$pub_recg <- sapply(test$pub_rec, adj_pub_rec)
+test$annual_incg <- sapply(test$annual_inc, adj_income)
+test$dtig <- sapply(test$dti, adj_dti)
+test$month_diffg <- sapply(test$month_diff, adj_month_diff)
+test$emp_lengthg <- sapply(test$emp_length, adj_emp_length)
+test$int_rateg <- sapply(test$int_rate, adj_int_rate)
+test$loan_amntg <- sapply(test$loan_amnt, adj_loan_amnt)
+test$addr_stateg <- sapply(test$addr_state, adj_addr_state)
+test$purposeg <- sapply(test$purpose, adj_purpose)
+
+# Feature list for PD model
+featuresToUse = c(
+  "issue_d_formated",
+  "loan_status",
+  "Ypd",
+  "funded_amnt",
+  "recovery_rate",
+  "CCF",
   "term",
-  "loan_amnt",
-  "Y",
-  "annual_inc",
-  "emp_length",
-  "pub_rec",
-  "home_ownership",
-  "pub_rec_bankruptcies",
-  "purpose",
-  "int_rate",
-  "dti",
-  "month_diff",
-  "verification_status",
-  "delinq_2yrs",
-  "initial_list_status",
-  "hardship_flag",
-  "grade"
+  "pub_recg",
+  'annual_inc',
+  "annual_incg",
+  'dti',
+  "dtig",
+  'month_diff',
+  "month_diffg",
+  'emp_length',
+  "emp_lengthg",
+  'int_rate',
+  "int_rateg",
+  'loan_amnt',
+  "loan_amntg",
+  'grade',
+  "addr_stateg",
+  'purpose',
+  'purposeg'
 )
 
-train <- d[issue_d_formated < zoo::as.yearmon('2018-01'), ..final_cols]
-test <- d[issue_d_formated >= zoo::as.yearmon('2018-01'), ..final_cols]
+featuresMLPD <- c(
+  "term",
+  "pub_recg",
+  "annual_incg",
+  "dtig",
+  "month_diffg",
+  "emp_lengthg",
+  "int_rateg",
+  "loan_amntg",
+  'grade',
+  "addr_stateg",
+  "purposeg"
+)
+
+# Beta regression features
+featuresMLbeta <- c(
+  "term",
+  "pub_recg",
+  "annual_inc",
+  "dti",
+  "month_diff",
+  #"emp_lengthg",
+  "int_rate",
+  "loan_amnt",
+  "grade",
+  "addr_stateg",
+  "purposeg"
+)
+
+# Subsetting 
+train <- train[, ..featuresToUse]
+test <- test[, ..featuresToUse]
 
 # Saving the data for PD  
 write.csv(na.omit(train), 'data/train.csv', row.names=FALSE)
 write.csv(na.omit(test), 'data/test.csv', row.names=FALSE)
 
-# Saving the data for LGD and EAD 
-train <- loan_default_data[issue_d_formated < zoo::as.yearmon('2018-01')]
-test <- loan_default_data[issue_d_formated >= zoo::as.yearmon('2018-01')]
+# Creating frames for charged off loans
+loan_default_data_train = train[loan_status %in% c("Charged Off", "Does not meet the credit policy. Status:Charged Off")]
+loan_default_data_test = test[loan_status %in% c("Charged Off", "Does not meet the credit policy. Status:Charged Off")]
 
 # Saving the data for PD  
-write.csv(na.omit(train), 'data/train_defaults.csv', row.names=FALSE)
-write.csv(na.omit(test), 'data/test_defaults.csv', row.names=FALSE)
+write.csv(na.omit(loan_default_data_train), 'data/train_defaults.csv', row.names=FALSE)
+write.csv(na.omit(loan_default_data_test), 'data/test_defaults.csv', row.names=FALSE)
+
+# Saving feature list
+write.csv(featuresMLPD, "data/featuresMLPD.csv")
+write.csv(featuresMLbeta, "data/featuresMLbeta.csv")
 ```
-
-# Removing objects from memory
-
-```{r}
-rm(list=ls())
-```
-
-

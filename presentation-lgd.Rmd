@@ -2,11 +2,13 @@
 title: "Expected credit loss"
 author: "Eligijus Bujokas"
 date: "01/07/2021"
+fontsize: 8pt
 output: 
-  ioslides_presentation:
-   transition: slower
-   logo: presentation/scorify.jpg
-   widescreen: true
+  beamer_presentation:
+    number_sections: true
+   #transition: slower
+   #logo: presentation/scorify.jpg
+   #widescreen: true
 ---
 
 ```{r setup, include=FALSE}
@@ -21,6 +23,7 @@ library(gridExtra)
 library(pROC)
 library(dplyr)
 library(ROCR)
+library(betareg)
 Sys.setlocale("LC_ALL","C")
 ```
 
@@ -60,26 +63,23 @@ EAD - Exposure at default
 The data is monthly spanning from 2008 January up until 2018 December (included).
 
 ```{r include=FALSE}
-# Using fread to read the data
-d <- fread('data/Loan_status_2007-2020Q3.gzip')
+# Reading train and test data 
+train <- fread('data/train.csv')
+test <- fread('data/test.csv')
 
-# Fixing the dates
-# Creating the splited columns 
-d[, c("issue_m", "issue_y"):=tstrsplit(issue_d, "-")]
-
-# Getting the last two digits of issue_y
-d[, issue_y:=str_sub(issue_y, -2)]
+d <- rbind(train, test)
 
 # Creating the formated column
-d[, issue_d_formated:=zoo::as.yearmon(paste(issue_m, issue_y, sep="-"), "%b-%y")]
+d[, issue_d_formated:=zoo::as.yearmon(issue_d_formated, "%b %Y")]
 
-# Subseting the data 
-d <- d[issue_d_formated < zoo::as.yearmon('2019-01')]
+# Saving the Ypd as Y for ploting purposes
+d$Y <- d$Ypd
 
 # Aggregating by issue date and sorting
 loan_n = d[, .('loans_monthly' = .N), by="issue_d_formated"] %>% 
   .[order(issue_d_formated)]
 ```
+
 ```{r}
 # Ploting the time series
 ggplot(data=loan_n, aes(x=issue_d_formated, y=loans_monthly)) +
@@ -101,20 +101,9 @@ d[, .N, by="loan_status"] %>%
 ## Bad loans
 
 ```{r}
-# Function to encode the good loans as 1 and 0 as bad loans
-create_Y <- function(x, bad_loans=c('Late (31-120 days)', "Default", "Charged Off", "Does not meet the credit policy. Status:Charged Off")){
-  return(ifelse(is.element(x, bad_loans), 'bad', 'good'))
-}
-
-# Creating the Y variable
-d[, Y:=create_Y(loan_status)]
-
-# Saving the variable as factor
-d$Y <- as.factor(d$Y)
-
 # Visualizing the distribution of Y 
-bymonth <- d[, .N, by=c("issue_d_formated", "Y")] %>% 
-  cast(., issue_d_formated ~ Y, value="N") %>% 
+bymonth <- d[, .N, by=c("issue_d_formated", "Ypd")] %>% 
+  cast(., issue_d_formated ~ Ypd, value="N") %>% 
   data.table(.) %>% 
   .[, rate:=bad * 100/(bad + good)]
 
@@ -197,66 +186,31 @@ plotWoe <- function(ft, woeData){
             coord_flip()
    return(p)
 }
-
-capvalues <- function(x, cap){
-  return(min(c(x, cap)))
-}
 ```
 
 ```{r}
 woedf <- woe('term', d)
-print(woedf)
-```
-
-## Continues variable - interest rate 
-
-```{r}
-d$int_rate <- as.numeric(gsub("%", "", d$int_rate))
-
-ggplot(data=d, aes(x=int_rate, fill=Y)) + geom_density(alpha=0.5)
+kable(woedf)
 ```
 
 ## WOE for interest rates
 
 ```{r}
-# Cutting the annual income into 10 equal sized partitions
-d$int_groups = cut(d$int_rate, 5)
-
-woedf <- woe('int_groups', d)
+woedf <- woe('int_rateg', d)
 plotWoe('Interest rate groups', woedf)
 ```
 
 ## Annual income 
 
 ```{r}
-adj_income <- function(x){
-  if(!is.na(x)){
-    if(x < 30000){
-      return("[0,30)")
-    } else if (x < 60000){
-      return("[30,60)")
-    } else if (x < 100000){
-      return("[60,100)")
-    } else if (x < 200000){
-      return("[100,200)")
-    } else {
-      return("200+")
-    }
-  } else {
-    return(NA)
-  }
-}
-
-d$annual_inc_groups <- sapply(d$annual_inc, adj_income)
-
-woedf <- woe('annual_inc_groups', d)
+woedf <- woe('annual_incg', d)
 plotWoe('Annual income splits', woedf)
 ```
 
 ## Some more features
 
 ```{r some more features}
-cat_vars <- c( "grade", "home_ownership", 'initial_list_status', 'verification_status')
+cat_vars <- c( "grade", "month_diffg", 'dtig', 'pub_recg')
 plots <- list()
 
 for(cat_var in cat_vars){
@@ -264,7 +218,7 @@ for(cat_var in cat_vars){
   plots[[cat_var]] <- plotWoe(cat_var, woeStat)
 }
 
-grid.arrange(plots$grade, plots$home_ownership, plots$initial_list_status, plots$verification_status, ncol = 2, nrow=2)
+grid.arrange(plots$grade, plots$month_diff, plots$dti, plots$pub_rec, ncol = 2, nrow=2)
 ```
 
 ## Final variable list used for PD
@@ -299,7 +253,7 @@ $$P(Y = 1|X)$$
 
 In our case:
 
-$$P(Y = "good-loan"| "data")$$
+$$P(Y = good\_loan| data)$$
 
 ## Logistic regression - regression part  
 
@@ -369,9 +323,9 @@ ggplot(PDcoefs, aes(y=feature, x=coef)) + geom_bar(stat="identity", col='steelbl
 
 ## Results on the test set
 
-```{r warning=FALSE}
+```{r warning=FALSE, comment=FALSE}
 testPD <- fread("PDresults.csv")
-par(mfrow=c(1, 3))
+#par(mfrow=c(1, 3))
 pred <- ROCR::prediction(testPD$yhat, testPD$Y)
 perf <- performance(pred, measure = "tpr", x.measure = "fpr")
 
@@ -381,11 +335,11 @@ roc_stat <- ROC$auc
 plot(perf, main=paste('ROC plot - GINI:', round(2 * roc_stat - 1, 3)))
 abline(b=1, a=0, col='blue')
 
-perf <- performance(pred, measure = "prec", x.measure = "cutoff")
-plot(perf, main='Precision plot')
+#perf <- performance(pred, measure = "prec", x.measure = "cutoff")
+#plot(perf, main='Precision plot')
 
-perf <- performance(pred, measure = "rec", x.measure = "cutoff")
-plot(perf, main='Recall plot')
+#perf <- performance(pred, measure = "rec", x.measure = "cutoff")
+#plot(perf, main='Recall plot')
 ```
 
 ## Converting to a scorecard
@@ -395,14 +349,16 @@ We will recalibrate the coefficients to be between 200 and 800.
 ```{r}
 refCols <- c(
   "term:60 months", 
-  "annual_inc_groups:[0,30)",
-  "dti_groups:30+",
-  "emp_length_groups:< 1 year",
-  "int_rate_groups:25+",
+  "annual_incg:[0,30)",
+  "dtig:30+",
+  "emp_lengthg:< 1 year",
+  "int_rateg:25+",
   "grade:G",
-  "loan_amnt_groups:22000+",
-  "pub_rec_groups:>0",
-  "month_diff_groups:[0, 70)"
+  "loan_amntg:22000+",
+  "pub_recg:>0",
+  "month_diffg:[0, 70)",
+  "addr_stateg:OK:AL:AR:MS:NE",
+  "purposeg:small_business"
   )
 
 coefFrame <- PDcoefs %>% select(c('feature', 'coef'))
@@ -485,3 +441,143 @@ ggplot(scorecard, aes(y=reorder(feature, score_rounded), x=score_rounded)) +
   labs(x='Score', y='feature')
 ```
 
+## EAD modeling - Y variable
+
+The dependent variable for the exposure at default is the amount of funds that a bank is at risk at a default event. They way we model it is using a variable called 
+credit conversion factor (CCF):
+
+$$ CCF_{i} = \dfrac{funded\_amount_{i} - received\_payments_{i}}{funded\_amount_{i}} $$
+
+The higher the CCF for a given loan, the bigger is the EAD sum:
+
+$$ EAD_{i} = CCF_{i} * funded\_amount_{i} $$
+
+## EAD Y variable distribution
+
+```{r}
+trainEAD <- fread('data/train_defaults.csv')
+testEAD <- fread('data/test_defaults.csv')
+
+trainEAD <- trainEAD[(CCF < 1) & (CCF>0)]
+ggplot(data=trainEAD, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('CCF')
+```
+
+
+## The model for EAD 
+
+```{r}
+EADcoefs <- fread('modelEAD.csv')
+EADcoefs$exp_beta <- exp(EADcoefs$coef)
+kable(EADcoefs)
+```
+
+## EAD residuals in the test set 
+
+```{r}
+EADresults <- fread("EADresults.csv")
+
+# Getting the residuals 
+EADresults$res <- EADresults$CCF - EADresults$CCF_hat
+
+maeEAD <- sum(abs(EADresults$res)) / nrow(EADresults)
+p1 <- ggplot(data=EADresults, aes(x=res)) + geom_histogram(fill='steelblue', color='black') + 
+  ggtitle(paste('MAE: ', round(maeEAD, 3)))
+
+p2 <- ggplot(EADresults, aes(x=CCF, y=res)) + geom_point(col='steelblue', alpha=0.4)
+
+grid.arrange(p1, p2)
+```
+
+## LGD modeling - Y variable
+
+LGD stands for losses given default. When dealing with loan data we can model recovery rate. Then, for each loan,
+
+$$ LGD = 1 - recovery\_rate $$
+In this data set, we calculate the recovery rate using the following equation:
+
+$$ rt_{i} = \dfrac{recoveries_{i}}{funded\_amount_{i}} $$
+
+$i$ - loan $i$.
+
+When modeling the rt in this dataset we need to take into account only those loans who were charged off.
+
+## LGD Y variable distribution
+
+```{r warning=FALSE, comment=FALSE}
+trainLGD <- fread('data/train_defaults.csv')
+testLGD <- fread('data/test_defaults.csv')
+
+trainLGD <- trainLGD[(recovery_rate < 1) & (recovery_rate>0)]
+ggplot(data=trainLGD, aes(x=recovery_rate)) + geom_histogram(fill='steelblue', color='black') + ggtitle('Recovery rates')
+```
+
+## The model for LGD 
+
+```{r}
+LGDcoefs <- fread('modelLGD.csv') %>% select(-'V1')
+kable(LGDcoefs)
+```
+
+## LGD residuals in the test set
+
+```{r}
+LGDresults <- fread("LGDresults.csv")
+
+# Getting the residuals 
+LGDresults$res <- LGDresults$recovery_rate - LGDresults$recovery_rate_hat
+
+maeLGD <- sum(abs(LGDresults$res)) / nrow(LGDresults)
+p1 <- ggplot(data=LGDresults, aes(x=res)) + geom_histogram(fill='steelblue', color='black') + 
+  ggtitle(paste('MAE: ', round(maeLGD, 3)))
+
+p2 <- ggplot(LGDresults, aes(x=recovery_rate, y=res)) + geom_point(col='steelblue', alpha=0.4)
+
+grid.arrange(p1, p2)
+```
+
+## Combining all the parts together 
+
+The final ECL estimate using the dependent variables we estimated: 
+
+$$ ECL =(1 - P(Y=1)) * (1 - recovery\_rate) * CCF * loan\_amount $$
+
+## Distribution of expected credit loss
+
+```{r}
+EAD <- fread('test-all-EAD.csv')
+LGD <- fread('test-all-LGD.csv')
+PD <- fread('test-all-PD.csv')
+
+# Saving the results
+test$CCF_hat <- EAD$CCF_hat
+test$recovery_rate_hat <- LGD$rt_hat
+test$PD_hat <- PD$yhat
+
+# Getting the predicted percentage lost 
+test$LGD_rate <- 1 - test$recovery_rate_hat
+
+# Calculating the ECL for each loan 
+test$ECL <- (1 - test$PD_hat) * test$LGD_rate * test$CCF_hat * test$loan_amnt
+
+ggplot(test, aes(x=ECL)) + geom_histogram(col='steelblue', fill='lightblue') + ggtitle(paste("Mean loss: ", round(mean(test$ECL), 2)))
+
+test$lost_amount <- test$loan_amnt * (1 - test$recovery_rate) * test$CCF * ifelse(test$Ypd=='bad', 1, 0)
+
+test$res <- abs(test$ECL - test$lost_amount)
+```
+
+## Absolute residual distribution
+
+```{r}
+ggplot(test, aes(x=res)) + geom_histogram(col='steelblue', fill='lightblue') + ggtitle(paste("Median: ", round(median(test$res), 2)))
+```
+
+## Final results
+
+```{r}
+results <- data.frame('total_loss'=sum(test$lost_amount) / 10^6, 'ECL'=sum(test$ECL) / 10^6, 'total_funded'=sum(test$loan_amnt) / 10^6)
+results$amnt_default <- results$total_loss/results$total_funded
+results$amnt_default_fc <- results$ECL / results$total_funded
+
+kable(results)
+```
