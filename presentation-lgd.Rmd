@@ -108,7 +108,7 @@ d[, .N, by="loan_status"] %>%
 
 ## Bad loans
 
-```{r, warning=NA, comment=NA}
+```{r, warning=FALSE, comment=NA, message=FALSE}
 # Visualizing the distribution of Y 
 bymonth <- d[, .N, by=c("issue_d_formated", "Ypd")] %>% 
   cast(., issue_d_formated ~ Ypd, value="N") %>% 
@@ -162,7 +162,7 @@ $$WOE_{i, j} = log \left(\dfrac{P(X_{i}=j|Y=1)}{P(X_{i} = j|Y=0)}\right)$$
 
 ## WOE example
 
-```{r woe, include=FALSE}
+```{r woe, include=FALSE, message=FALSE}
 woe <- function(feature, data){
   # Grouping by the feature and getting the total number of observations in each level
   woeTable <- data[, .N, by=c("Y", feature)] %>% 
@@ -355,7 +355,7 @@ ggplot(PDcoefs, aes(y=feature, x=coef)) + geom_bar(stat="identity", col='steelbl
 
 ## Results on the test set
 
-```{r warning=NA, comment=NA}
+```{r warning=NA, comment=NA, message=FALSE}
 testPD <- fread("PDresults.csv")
 #par(mfrow=c(1, 3))
 pred <- ROCR::prediction(testPD$yhat, testPD$Y)
@@ -487,7 +487,7 @@ $$ EAD_{i} = CCF_{i} * funded\_amount_{i} $$
 
 ## EAD Y variable distribution
 
-```{r warning=NA, comment=NA}
+```{r warning=NA, comment=NA, message=FALSE}
 trainEAD <- fread('data/train_defaults.csv')
 testEAD <- fread('data/test_defaults.csv')
 
@@ -527,7 +527,7 @@ kable(EADcoefs)
 
 ## EAD residuals in the test set 
 
-```{r warning=NA, comment=NA}
+```{r warning=NA, comment=NA, message=FALSE}
 EADresults <- fread("EADresults.csv") %>% 
   select(-"V1")
 
@@ -558,7 +558,7 @@ When modeling the rt in this dataset we need to take into account only those loa
 
 ## LGD Y variable distribution
 
-```{r warning=NA, comment=NA}
+```{r warning=NA, comment=NA, message=FALSE}
 trainLGD <- fread('data/train_defaults.csv')
 testLGD <- fread('data/test_defaults.csv')
 
@@ -575,7 +575,7 @@ kable(LGDcoefs)
 
 ## LGD residuals in the test set
 
-```{r comment=NA, warning=NA}
+```{r comment=NA, warning=NA, message=FALSE}
 LGDresults <- fread("LGDresults.csv")
 
 # Getting the residuals 
@@ -598,7 +598,7 @@ $$ ECL =(1 - P(Y=1)) * (1 - recovery\_rate) * CCF * loan\_amount $$
 
 ## Distribution of expected credit loss
 
-```{r comment=NA, warning=NA}
+```{r comment=NA, warning=NA, message=FALSE}
 EAD <- fread('test-all-EAD.csv')
 LGD <- fread('test-all-LGD.csv')
 PD <- fread('test-all-PD.csv')
@@ -614,16 +614,23 @@ test$LGD_rate <- 1 - test$recovery_rate_hat
 # Calculating the ECL for each loan 
 test$ECL <- (1 - test$PD_hat) * test$LGD_rate * test$CCF_hat * test$loan_amnt
 
-ggplot(test, aes(x=ECL)) + geom_histogram(col='steelblue', fill='lightblue') + ggtitle(paste("Mean loss: ", round(mean(test$ECL), 2)))
-
 test$lost_amount <- test$loan_amnt * (1 - test$recovery_rate) * test$CCF * ifelse(test$Ypd=='bad', 1, 0)
 
 test$res <- abs(test$ECL - test$lost_amount)
+
+# Creating ID var
+test$id <- as.character(seq(1, nrow(test)))
+
+# Melting frame for losses
+losses <- melt(as.data.frame(test[, c('lost_amount', 'ECL')], id.vars='id')) %>% 
+  data.table(.)
+
+ggplot(losses, aes(x=value, fill=variable)) + geom_density(alpha=0.5) + ggtitle(paste("Mean loss pred: ", round(mean(test$ECL), 2), " Mean loss true: ", round(mean(test$lost_amount), 2)))
 ```
 
 ## Absolute residual distribution
 
-```{r comment=NA, warning=NA}
+```{r comment=NA, warning=NA, message=FALSE}
 ggplot(test, aes(x=res)) + geom_histogram(col='steelblue', fill='lightblue') + ggtitle(paste("Median: ", round(median(test$res), 2)))
 ```
 
