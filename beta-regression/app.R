@@ -38,6 +38,13 @@ ui <- fluidPage(
                         value=c(-4, 4)
             ),
             
+            sliderInput("phi",
+                        "Phi value",
+                        min=0,
+                        max=100,
+                        value=c(50)
+            ),
+            
             sliderInput("granularity",
                         "Granularity of grid",
                         min=10,
@@ -58,31 +65,29 @@ ui <- fluidPage(
 # Define server logic required to draw a histogram
 server <- function(input, output) {
     
-    Y <<- c(0.1, 0.2, 0.5, 0.19, 0.9)
-    X <<- c(2, 2.5, 5, 1.8, 10)
+    X <<- rnorm(100)
+    Y <<- 1 / (1 + exp(-1 * (0.9 * X)))
     Xseq <<- seq(min(X), max(X), length=100)
     
     logisticScore <- function(X, beta0, beta1){
         return(1/( 1 + exp(-1 * (beta0 + beta1 * X))))
     }
     
-    MLscore <- function(Y, X, beta0, beta1, eps=0.00001){
+    MLscore <- function(Y, X, beta0, beta1, phi, eps = 0.00001){
         # Getting the logistic value output
         score = logisticScore(X, beta0, beta1)
         
-        # Getting the other event score
-        score_inverse = 1 - score
+        # Calculating log Gammas
+        log1 = log(gamma(phi))
+        log2 = log(gamma(phi * score))
+        log3 = log(gamma((1 - score) * phi + eps))
         
-        # Getting the logs
-        score_log = log(score + eps)
-        score_inverse_log = log(score_inverse + eps)
-        
-        # Multiplying with Y 
-        product_1 = Y * score_log
-        product_2 = (1 - Y) * score_inverse_log
+        # Getting the ys products
+        y1 = (score * phi - 1) * log(Y)
+        y2 = ((1 - score) * phi - 1) * log(1 - Y)
         
         # Adding and summing each coordinates
-        return(sum(product_1 + product_2))
+        return(sum(log1 - log2 - log3 + y1 + y2))
     }
     
     output$inputPlot <- renderPlot({
@@ -108,7 +113,7 @@ server <- function(input, output) {
         scores <- c()
         for(i in 1:nrow(grid)){
             params <- grid[i, ]
-            scores <- c(scores, MLscore(Y, X, as.numeric(params[1]), as.numeric(params[2])))
+            scores <- c(scores, MLscore(Y, X, as.numeric(params[1]), as.numeric(params[2]), as.numeric(input$phi)))
         }
         
         # Adding to the original frame 

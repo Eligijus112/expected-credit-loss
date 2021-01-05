@@ -11,6 +11,7 @@ library(data.table)
 library(pROC)
 library(ROCR)
 library(ggplot2)
+library(dplyr)
 library(gridExtra)
 ```
 
@@ -52,7 +53,7 @@ X$Y <- train$CCF
 modelEAD<- betareg(Y ~ ., data=X)
 
 # Creating the coef frame 
-coefFrame <- data.table('feature'=names(modelLGD$coefficients$mean), 'coef'=modelLGD$coefficients$mean)
+coefFrame <- data.table('feature'=names(modelEAD$coefficients$mean), 'coef'=modelEAD$coefficients$mean)
 coefFrame$feature <- gsub('`', '', coefFrame$feature)
 
 # Saving the coef frame

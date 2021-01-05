@@ -5,6 +5,7 @@ date: "01/07/2021"
 fontsize: 8pt
 output: 
   beamer_presentation:
+    theme: "Singapore"
     number_sections: true
    #transition: slower
    #logo: presentation/scorify.jpg
@@ -33,7 +34,7 @@ The aim of this presentation is to model and present the various techniques of w
 
 The subject in this presentation will be one of the biggest short term loan lenderer in US: **Lending Club**.
 
-```{r fig.width = 4, fig.align='center'}
+```{r out.width="75%", fig.align='center'}
 include_graphics("presentation/lending-club.png")
 ```
 
@@ -57,6 +58,12 @@ PD - Probability of default
 LGD - Losses given default
 
 EAD - Exposure at default
+
+## Expected credit loss modeling in a nutshell
+
+```{r out.width="75%", fig.align='center'}
+include_graphics("presentation/modeling.png")
+```
 
 ## Exploring the data 
 
@@ -93,14 +100,15 @@ ggplot(data=loan_n, aes(x=issue_d_formated, y=loans_monthly)) +
 There is a feature in the data called **loan_status**. The values can be: 
 
 
-```{r}
+```{r, comment=NA}
 d[, .N, by="loan_status"] %>% 
-  .[order(N)]
+  .[order(N)] %>% 
+  kable(.)
 ```
 
 ## Bad loans
 
-```{r}
+```{r, warning=NA, comment=NA}
 # Visualizing the distribution of Y 
 bymonth <- d[, .N, by=c("issue_d_formated", "Ypd")] %>% 
   cast(., issue_d_formated ~ Ypd, value="N") %>% 
@@ -323,7 +331,7 @@ ggplot(PDcoefs, aes(y=feature, x=coef)) + geom_bar(stat="identity", col='steelbl
 
 ## Results on the test set
 
-```{r warning=FALSE, comment=FALSE}
+```{r warning=NA, comment=NA}
 testPD <- fread("PDresults.csv")
 #par(mfrow=c(1, 3))
 pred <- ROCR::prediction(testPD$yhat, testPD$Y)
@@ -381,8 +389,9 @@ mincoef <- coefFrame[, .("coef_value"=min(coef)), by='origFeature']
 maxcoef <- coefFrame[, .("coef_value"=max(coef)), by='origFeature']
 
 minmaxframe <- merge(mincoef, maxcoef, by='origFeature') %>% 
-  setnames(., c('coef_value.x', 'coef_value.y'), c("min_coef", 'max_coef')) %>% 
-  print(.)
+  setnames(., c('coef_value.x', 'coef_value.y'), c("min_coef", 'max_coef')) 
+
+kable(minmaxframe)
 ```
 
 ## Formulas for converting 
@@ -454,7 +463,7 @@ $$ EAD_{i} = CCF_{i} * funded\_amount_{i} $$
 
 ## EAD Y variable distribution
 
-```{r}
+```{r warning=NA, comment=NA}
 trainEAD <- fread('data/train_defaults.csv')
 testEAD <- fread('data/test_defaults.csv')
 
@@ -462,6 +471,27 @@ trainEAD <- trainEAD[(CCF < 1) & (CCF>0)]
 ggplot(data=trainEAD, aes(x=CCF)) + geom_histogram(fill='steelblue', color='black') + ggtitle('CCF')
 ```
 
+## Beta regression 
+
+When the dependant variable is a ratio and distributed similar to a beta distribution, we can use the beta regression method. 
+
+The density for a beta distributed variable can be defined as:
+
+$$ f(y; \mu, \phi) = \dfrac{\Gamma(\phi)}{\Gamma(\mu \phi)\Gamma((1-\mu)\phi)} y^{\mu\phi-1}(1 - y)^{(1 - \mu)\phi-1}$$
+
+$0 < y < 1$ 
+
+$0 < \mu < 1$
+
+$\phi > 0$
+
+$$ \mu = g^{-1}(X\beta) $$
+
+## Beta regression - estimation
+
+Same as in logistic regression - maximizing likelihood:
+
+$$ l(\mu, \phi) = log(\Gamma(\phi)) - log(\Gamma(\phi \mu))  - log(\Gamma((1 - \mu)\phi)) + (\mu\phi -1)log(y) + ((1 - \mu)\phi - 1)log(1 - y)$$
 
 ## The model for EAD 
 
@@ -473,8 +503,9 @@ kable(EADcoefs)
 
 ## EAD residuals in the test set 
 
-```{r}
-EADresults <- fread("EADresults.csv")
+```{r warning=NA, comment=NA}
+EADresults <- fread("EADresults.csv") %>% 
+  select(-"V1")
 
 # Getting the residuals 
 EADresults$res <- EADresults$CCF - EADresults$CCF_hat
@@ -503,7 +534,7 @@ When modeling the rt in this dataset we need to take into account only those loa
 
 ## LGD Y variable distribution
 
-```{r warning=FALSE, comment=FALSE}
+```{r warning=NA, comment=NA}
 trainLGD <- fread('data/train_defaults.csv')
 testLGD <- fread('data/test_defaults.csv')
 
@@ -520,7 +551,7 @@ kable(LGDcoefs)
 
 ## LGD residuals in the test set
 
-```{r}
+```{r comment=NA, warning=NA}
 LGDresults <- fread("LGDresults.csv")
 
 # Getting the residuals 
@@ -543,7 +574,7 @@ $$ ECL =(1 - P(Y=1)) * (1 - recovery\_rate) * CCF * loan\_amount $$
 
 ## Distribution of expected credit loss
 
-```{r}
+```{r comment=NA, warning=NA}
 EAD <- fread('test-all-EAD.csv')
 LGD <- fread('test-all-LGD.csv')
 PD <- fread('test-all-PD.csv')
@@ -568,7 +599,7 @@ test$res <- abs(test$ECL - test$lost_amount)
 
 ## Absolute residual distribution
 
-```{r}
+```{r comment=NA, warning=NA}
 ggplot(test, aes(x=res)) + geom_histogram(col='steelblue', fill='lightblue') + ggtitle(paste("Median: ", round(median(test$res), 2)))
 ```
 
