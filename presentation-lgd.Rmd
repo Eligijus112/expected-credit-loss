@@ -231,23 +231,24 @@ grid.arrange(plots$grade, plots$month_diff, plots$dti, plots$pub_rec, ncol = 2, 
 
 ## Final variable list used for PD
 
-term
+```{r features, comment=NA, warning=NA}
 
-pub_rec
+featuresUsed <- c(
+  "term",
+  "pub_rec",
+  "annual_inc",
+  "dti",
+  "month_diff",
+  "emp_length",
+  "int_rate",
+  "loan_amnt",
+  "grade",
+  "purpose",
+  "addr_state"
+)
+kable(featuresUsed)
+```
 
-annual_inc
-
-dti
-
-month_diff
-
-emp_length
-
-int_rate
-
-loan_amnt
-
-grade
 
 ## Machine learning method 
 
@@ -305,19 +306,42 @@ $$z := \beta_{0} + \Sigma_{i=1}^{k} \left( \beta_{i} X_{i} \right)) $$
 
 Logistic regression is form of general linear models (GLM) where the link function is the logit function. 
 
-$$ \mathbb E[Y|X] = logit^{-1}(z) = logistic(z) = \dfrac{1}{1 + e^{-z}}$$
+$$ \mathbb E[Y|X] = P(Y=1|X) = logit^{-1}(z) = logistic(z) = \dfrac{1}{1 + e^{-z}}$$
+
+## Bernouli distribution 
+
+Because our Y variable is either 1 or 0 (good or bad loan) we should talk about the Bernoulli distribution. 
+
+$$ Y \in \{0, 1\} $$
+
+$$P(Y=1) = p = 1 - P(Y=0)$$
+
+The distribution is:
+
+$$ f(y, p) = p ^ {y} (1 - p)^ {1 - y}  $$
+
+## Bernouli and logistic regression maximum likelihood
+
+The likelihood function (likelihood) measures the goodness of fit of a statistical model to a sample of data for **given values of the unknown parameters**. 
+
+$$ l(\theta | x) = p_{\theta}(x) = P_{\theta}(X=x)$$
+
+The maximum likelihood is a method to maximize the likelihood function in terms of the parameter $\theta$ such that the observed data is most probable given the assumption about the distribution of the data.
+
+Bernoulli:
+
+$$ l(p) = \Pi_{i=1}^{n} p^{y_{i}}(1 - p)^{1 - y_{i}}  $$
+
+Logistic:
+
+$$ l(\beta) = \Pi_{i=1}^{n} \left[ logistic(z) ^ {y_{i}} ((1 - logistic(z))^{1 - y_{i}})  \right] $$
 
 ## Estimating the coefficients
 
-The way we obtain the coefficients $\beta$ is by using a procedure called maximum likelihood (ML). 
 
-$$\Pi_{i=1}^{n} \left[ P(Y=1|X) ^ {y_{i}} (P(Y=0|X)^{1 - y_{i}})  \right] \rightarrow max$$
+$$L(\beta| Y, X) = log(l ( \beta | Y, X)) $$
 
-$$L(\beta | Y, X) = \Pi_{i=1}^{n} \left[ logistic(z) ^ {y_{i}} ((1 - logistic(z))^{1 - y_{i}})  \right]$$
-
-$$l(\beta| Y, X) = log(L ( \beta | Y, X)) $$
-
-$$ l(\beta) = \Sigma_{i=1}^{n}\left[y_{i} log(logisitc(z)) + (1 - y_{i})log(1 - logistic(z))  \right] $$ 
+$$ L(\beta) = \Sigma_{i=1}^{n}\left[y_{i} log(logisitc(z)) + (1 - y_{i})log(1 - logistic(z))  \right] $$ 
 
 The computer tries to find the "best" $\beta$ values such that the probability is as big as possible for witnessing the Y in our sample from the given X.
 
